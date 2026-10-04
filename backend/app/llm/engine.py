@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import func, select
 
 from app.db import SessionLocal
+from app.evals.versions import current_version
 from app.guardrails.pipeline import check_message
 from app.llm import context as context_module
 from app.llm.base import LLMClient, LLMError, ToolResult
@@ -56,7 +57,21 @@ class Prepared:
     # cloud switch is moving local-model apps to a cloud provider).
     provider: str = ""
     model: str = ""
+    prompt_version_id: int | None = None
     usage: list[UsageEvent] = field(default_factory=list)
+
+
+@dataclass
+class Generation:
+    """One answer as it's produced: text so far, metadata, and token usage."""
+
+    meta: dict
+    parts: list[str] = field(default_factory=list)
+    usage: list[UsageEvent] = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        return "".join(self.parts).strip()
 
 
 class ChatAccessError(Exception):
@@ -122,6 +137,8 @@ def _prepare(req: ChatRequest) -> Prepared:
             history=history_for(db, conversation.id, user_msg.id),
         )
         prepared.provider, prepared.model = chat_model_for(app, load_cloud_switch(db, app.owner_id))
+        prepared.prompt_version_id = current_version(db, app).id
+        db.commit()
         try:
             prepared.client = client_for(db, app.owner_id, prepared.provider)
         except ProviderError as exc:
@@ -137,6 +154,7 @@ def _finish(prep: Prepared, answer: str, meta: dict, exclude_turn: bool = False)
             role="assistant",
             content=answer,
             meta={**meta, "excluded": exclude_turn} if exclude_turn else meta,
+            prompt_version_id=prep.prompt_version_id,
         )
         db.add(msg)
         if exclude_turn:
@@ -184,75 +202,14 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
         yield {"type": "done", "message_id": message_id}
         return
 
-    ctx = await context_module.gather(app, req.message, prep.history)
-    tools = context_module.tools_for(ctx)
-    session = prep.client.session(
-        model=prep.model,
-        system=build_system_prompt(app, ctx.has_documents, bool(tools)),
-        history=prep.history,
-        user_message=build_user_turn(req.message, ctx.excerpts, ctx.table_descriptions),
-        max_tokens=app.max_answer_tokens,
-        sampling=Sampling(app.temperature, app.seed),
-    )
-
     queue: asyncio.Queue[dict | None] = asyncio.Queue()
-    answer_parts: list[str] = []
-    meta: dict = {"sources": ctx.source_names, "tool_calls": [], **screened}
-
-    async def on_text(text: str) -> None:
-        answer_parts.append(text)
-        await queue.put({"type": "text", "text": text})
-
-    async def on_reset() -> None:
-        answer_parts.clear()
-        await queue.put({"type": "reset"})
+    gen = Generation(meta={"model": f"{prep.provider}/{prep.model}", **screened})
 
     async def converse() -> None:
-        retried_empty = False
         try:
-            for round_number in range(MAX_TOOL_ROUNDS + 1):
-                result = await session.step(tools, on_text, on_reset)
-                prep.usage.append(
-                    _usage_event(app, "chat", prep.provider, prep.model, result.input_tokens, result.output_tokens)
-                )
-                empty = result.stop_reason == "end" and not result.text.strip() and not result.tool_calls
-                if empty and not retried_empty and session.retry_empty():
-                    retried_empty = True
-                    result = await session.step(tools, on_text, on_reset)
-                    prep.usage.append(
-                        _usage_event(app, "chat", prep.provider, prep.model, result.input_tokens, result.output_tokens)
-                    )
-                if result.stop_reason == "refusal":
-                    await on_text("\n\nI can't help with that request.")
-                    meta["refused"] = True
-                    break
-                if result.stop_reason == "max_tokens":
-                    await on_text("\n\n*(This answer was cut off at the length limit.)*")
-                    break
-                if result.stop_reason != "tool_use":
-                    break
-                if round_number == MAX_TOOL_ROUNDS:
-                    await on_text("\n\nI wasn't able to finish looking that up. Please try a more specific question.")
-                    break
-                results: list[ToolResult] = []
-                for call in result.tool_calls:
-                    await queue.put({"type": "tool", "label": context_module.describe_call(ctx, call)})
-                    outcome = await context_module.run_tool(ctx, call)
-                    meta["tool_calls"].append(
-                        {"name": call.name, "arguments": call.arguments, "error": outcome.is_error}
-                    )
-                    results.append(outcome)
-                session.add_tool_results(results)
-                if answer_parts and not answer_parts[-1].endswith("\n"):
-                    await on_text("\n\n")
-        except LLMError as exc:
-            meta["error"] = str(exc)
-            await queue.put({"type": "error", "message": str(exc)})
-        except Exception:
-            log.exception("Chat turn failed")
-            meta["error"] = "internal"
-            await queue.put({"type": "error", "message": "Something went wrong while answering."})
+            await generate(app, prep.client, prep.provider, prep.model, prep.history, req.message, gen, queue.put)
         finally:
+            prep.usage.extend(gen.usage)
             await queue.put(None)
 
     task = asyncio.create_task(converse())
@@ -262,12 +219,15 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
     except BaseException:
         # The browser disconnected: stop generating and keep what was produced.
         task.cancel()
+        prep.usage.extend(gen.usage)
+        meta = gen.meta
         meta["error"] = meta.get("error") or "cancelled"
-        answer = "".join(answer_parts).strip()
+        answer = gen.text
         await asyncio.to_thread(_finish, prep, answer or "(no answer)", meta, not answer)
         raise
 
-    answer = "".join(answer_parts).strip()
+    meta = gen.meta
+    answer = gen.text
     if not answer and not meta.get("error"):
         # The model returned nothing at all.
         answer = "Sorry, I couldn't come up with an answer. Please try rephrasing the question."
@@ -275,3 +235,84 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
         yield {"type": "error", "message": answer}
     message_id = await asyncio.to_thread(_finish, prep, answer or "(no answer)", meta, not answer or meta.get("error") == "empty")
     yield {"type": "done", "message_id": message_id}
+
+
+async def generate(
+    app: ChatApp,
+    client: LLMClient,
+    provider: str,
+    model: str,
+    history: list[tuple[str, str]],
+    question: str,
+    gen: Generation,
+    emit,
+    usage_kind: str = "chat",
+) -> Generation:
+    """Answers one question: retrieval, the model call, and any data queries it makes.
+
+    Shared by live chat (which streams events through `emit`) and test runs.
+    Errors are recorded in gen.meta["error"] rather than raised.
+    """
+    ctx = await context_module.gather(app, question, history)
+    tools = context_module.tools_for(ctx)
+    gen.meta.setdefault("tool_calls", [])
+    gen.meta["sources"] = ctx.source_names
+    session = client.session(
+        model=model,
+        system=build_system_prompt(app, ctx.has_documents, bool(tools)),
+        history=history,
+        user_message=build_user_turn(question, ctx.excerpts, ctx.table_descriptions),
+        max_tokens=app.max_answer_tokens,
+        sampling=Sampling(app.temperature, app.seed),
+    )
+
+    async def on_text(text: str) -> None:
+        gen.parts.append(text)
+        await emit({"type": "text", "text": text})
+
+    async def on_reset() -> None:
+        gen.parts.clear()
+        await emit({"type": "reset"})
+
+    def record(result) -> None:
+        gen.usage.append(_usage_event(app, usage_kind, provider, model, result.input_tokens, result.output_tokens))
+
+    retried_empty = False
+    try:
+        for round_number in range(MAX_TOOL_ROUNDS + 1):
+            result = await session.step(tools, on_text, on_reset)
+            record(result)
+            empty = result.stop_reason == "end" and not result.text.strip() and not result.tool_calls
+            if empty and not retried_empty and session.retry_empty():
+                retried_empty = True
+                result = await session.step(tools, on_text, on_reset)
+                record(result)
+            if result.stop_reason == "refusal":
+                await on_text("\n\nI can't help with that request.")
+                gen.meta["refused"] = True
+                break
+            if result.stop_reason == "max_tokens":
+                await on_text("\n\n*(This answer was cut off at the length limit.)*")
+                break
+            if result.stop_reason != "tool_use":
+                break
+            if round_number == MAX_TOOL_ROUNDS:
+                await on_text("\n\nI wasn't able to finish looking that up. Please try a more specific question.")
+                break
+            results: list[ToolResult] = []
+            for call in result.tool_calls:
+                await emit({"type": "tool", "label": context_module.describe_call(ctx, call)})
+                outcome = await context_module.run_tool(ctx, call)
+                gen.meta["tool_calls"].append({"name": call.name, "arguments": call.arguments, "error": outcome.is_error})
+                results.append(outcome)
+            session.add_tool_results(results)
+            if gen.parts and not gen.parts[-1].endswith("\n"):
+                await on_text("\n\n")
+    except LLMError as exc:
+        gen.meta["error"] = str(exc)
+        await emit({"type": "error", "message": str(exc)})
+    except Exception:
+        log.exception("Answer generation failed")
+        gen.meta["error"] = "internal"
+        await emit({"type": "error", "message": "Something went wrong while answering."})
+    return gen

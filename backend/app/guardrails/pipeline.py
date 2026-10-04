@@ -6,7 +6,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.db import SessionLocal
 from app.guardrails.classifier import ClassifierError, classify
@@ -16,6 +16,7 @@ from app.llm.clients import client_for
 from app.llm.prompt import refusal_message
 from app.models import ChatApp, Chunk, DataSource, SchemaDoc, UsageEvent
 from app.providers import PROVIDERS, ProviderError
+from app.rag.embeddings import EmbeddingError, embed_query
 from app.routing import CloudSwitch, classifier_for, load_cloud_switch
 
 log = logging.getLogger(__name__)
@@ -89,14 +90,37 @@ def _setup(app: ChatApp, provider: str):
         return client_for(db, app.owner_id, provider), lines[:MAX_DATA_LINES]
 
 
+# Cosine distance at or below which a question counts as covered by the app's documents.
+# Measured with EmbeddingGemma: questions answered by a document scored 0.37-0.53,
+# unrelated questions 0.83 and above.
+DOCUMENT_MATCH_DISTANCE = 0.6
+
+
+async def _matches_documents(app: ChatApp, message: str) -> bool:
+    try:
+        vector = await embed_query(message)
+    except EmbeddingError:
+        return False
+
+    def nearest() -> float | None:
+        with SessionLocal() as db:
+            return db.scalar(
+                select(func.min(Chunk.embedding.cosine_distance(vector))).where(Chunk.app_id == app.id)
+            )
+
+    distance = await asyncio.to_thread(nearest)
+    return distance is not None and distance <= DOCUMENT_MATCH_DISTANCE
+
+
 async def check_message(
     app: ChatApp,
     history: list[tuple[str, str]],
     message: str,
     user_id: uuid.UUID | None,
     visitor_id: str | None,
+    apply_limits: bool = True,
 ) -> Verdict:
-    limit_reply = await asyncio.to_thread(check_limits, app, user_id, visitor_id)
+    limit_reply = await asyncio.to_thread(check_limits, app, user_id, visitor_id) if apply_limits else None
     if limit_reply:
         return Verdict(False, limit_reply, {"verdict": "rate_limited", "question": message[:500]})
 
@@ -137,6 +161,11 @@ async def check_message(
         "classifier": f"{provider}/{model}",
         "question": message[:500],
     }
+    if result.verdict == "off_topic" and await _matches_documents(app, message):
+        # A question the app's own documents closely match is in scope, whatever the
+        # classifier thought (small models only see each document's opening line).
+        meta.update(verdict="allowed", reason="Closely matches the app's documents")
+        return Verdict(True, meta=meta, usage=usage)
     if result.verdict == "allowed":
         return Verdict(True, meta=meta, usage=usage)
     # Off-topic and abusive messages get the same reply, so probing reveals nothing.

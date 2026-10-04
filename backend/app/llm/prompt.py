@@ -2,6 +2,10 @@
 
 from app.models import ChatApp
 
+# Bump when the prompt-building code below changes, so answers produced before and
+# after the change are attributed to different prompt versions.
+PROMPT_TEMPLATE_VERSION = "2026-10-04.1"
+
 DEFAULT_REFUSAL = "Sorry, I can only help with questions related to this assistant's topic."
 
 

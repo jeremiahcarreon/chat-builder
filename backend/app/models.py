@@ -16,6 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     Numeric,
     String,
     Text,
@@ -229,6 +230,93 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     # Classifier verdict, retrieved sources, tool calls, etc.
     meta: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    # Assistant messages: the prompt version that produced the answer.
+    prompt_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("prompt_versions.id", ondelete="SET NULL"), index=True
+    )
+    # Feedback from the person chatting: 1 helpful, -1 not helpful.
+    rating: Mapped[int | None] = mapped_column(SmallInteger)
+    feedback: Mapped[str | None] = mapped_column(Text)
+    rated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created_at()
+
+
+class PromptVersion(Base):
+    """A numbered snapshot of an app's prompt-affecting settings (see app/evals/versions.py)."""
+
+    __tablename__ = "prompt_versions"
+    __table_args__ = (UniqueConstraint("app_id", "number"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    app_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("chat_apps.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    template_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Optional label from the owner, e.g. "tightened scope".
+    note: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class TestCase(Base):
+    """A question with the expected outcome, re-run after prompt changes to catch regressions."""
+
+    __tablename__ = "test_cases"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    app_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("chat_apps.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    # answer | refuse
+    expectation: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Phrases the answer must contain (one per line); case-insensitive.
+    must_include: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    # A known-good answer; a judge model checks new answers agree with it.
+    reference_answer: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    notes: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    # The rated chat message this case was created from, if any.
+    source_message_id: Mapped[int | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = _created_at()
+
+
+class TestRun(Base):
+    __tablename__ = "test_runs"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    app_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("chat_apps.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    prompt_version_id: Mapped[int | None] = mapped_column(ForeignKey("prompt_versions.id", ondelete="SET NULL"))
+    # queued | running | done | failed
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    passed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = _created_at()
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TestResult(Base):
+    __tablename__ = "test_results"
+    __table_args__ = (UniqueConstraint("run_id", "case_id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("test_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("test_cases.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # Why it failed, one entry per failed check.
+    failures: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    seconds: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = _created_at()
 
 
