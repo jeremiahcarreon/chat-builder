@@ -31,6 +31,15 @@ BLOCKED = [
     ("set role postgres", "postgres"),
     ("create table x (a int)", "sqlite"),
     ("not sql at all (", "postgres"),
+    # Functions that execute a SQL string, hiding the tables it reads from the checks.
+    ("select ts_stat('select to_tsvector(''simple'', x) from sheets.other') from t", "spreadsheet"),
+    ("select query_to_xml('select * from other', true, false, '') from t", "postgres"),
+    ("select \"TS_STAT\"('select 1') from t", "postgres"),
+    ("select set_config('role', 'postgres', true)", "postgres"),
+    ("select nextval('s')", "postgres"),
+    # MySQL executes the contents of /*! ... */ comments.
+    ("select name from customers /*!50000 into outfile '/tmp/x' */", "mysql"),
+    ("select /*!50000 sleep(30), */ name from customers", "mysql"),
 ]
 
 

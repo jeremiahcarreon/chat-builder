@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from sqlglot import exp
 
 from app.connectors.results import format_results
-from app.connectors.sql_safety import check_select
+from app.connectors.sql_safety import DIALECTS, check_select
 from app.crypto import decrypt
 from app.db import SessionLocal
 from app.ingest import IngestError
@@ -327,8 +327,9 @@ def run_database_query(source_id: uuid.UUID, sql: str, max_rows: int) -> str:
     conn = connect(cs)
     try:
         cur = conn.cursor()
-        # The validated SQL is sent as written, with no parameters, in the source's own dialect.
-        cur.execute(sql)
+        # Run the SQL as regenerated from the validated parse, not the original text, so
+        # anything the parser saw differently from the database (comments, odd syntax) is gone.
+        cur.execute(tree.sql(dialect=DIALECTS[source.kind]))
         columns = [d[0] for d in cur.description or []]
         rows = cur.fetchmany(max_rows + 1)
         cur.close()

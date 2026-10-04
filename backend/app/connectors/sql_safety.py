@@ -44,11 +44,22 @@ FORBIDDEN = (
     exp.LoadData,
 )
 
-# Functions that can read files, sleep, or reach other servers.
+# Functions that read files, sleep, reach other servers, change settings or
+# sequences, or execute a SQL string (which would hide tables from the checks).
 FORBIDDEN_FUNCTIONS = {
-    "pg_read_file", "pg_read_binary_file", "pg_ls_dir", "pg_sleep", "lo_import", "lo_export",
-    "dblink", "dblink_exec", "load_file", "sleep", "benchmark", "openrowset", "opendatasource",
-    "openquery", "xp_cmdshell", "load_extension", "readfile", "writefile", "sys_exec",
+    "pg_read_file", "pg_read_binary_file", "pg_ls_dir", "pg_stat_file", "pg_sleep",
+    "pg_sleep_for", "pg_sleep_until", "lo_import", "lo_export", "lo_get", "dblink",
+    "dblink_exec", "query_to_xml", "query_to_xmlschema", "query_to_xml_and_xmlschema",
+    "cursor_to_xml", "cursor_to_xmlschema", "table_to_xml", "table_to_xmlschema",
+    "table_to_xml_and_xmlschema", "schema_to_xml", "schema_to_xmlschema",
+    "schema_to_xml_and_xmlschema", "database_to_xml", "database_to_xmlschema",
+    "database_to_xml_and_xmlschema", "ts_stat", "ts_debug", "set_config", "current_setting",
+    "pg_advisory_lock", "pg_advisory_lock_shared", "pg_advisory_xact_lock",
+    "pg_advisory_xact_lock_shared", "pg_try_advisory_lock", "pg_try_advisory_xact_lock",
+    "nextval", "setval", "pg_terminate_backend", "pg_cancel_backend", "pg_reload_conf",
+    "load_file", "sleep", "benchmark", "get_lock", "openrowset", "opendatasource",
+    "openquery", "openxml", "xp_cmdshell", "load_extension", "readfile", "writefile",
+    "sys_exec", "sys_eval",
 }
 
 
@@ -63,6 +74,9 @@ class UnsafeQuery(Exception):
 def check_select(sql: str, kind: str) -> exp.Expression:
     """Returns the parsed query, or raises UnsafeQuery with a reason the model can act on."""
     dialect = DIALECTS[kind]
+    if "/*!" in sql:
+        # MySQL runs the contents of "/*! ... */" comments; the parser treats them as comments.
+        raise UnsafeQuery("Comments of the form /*! ... */ are not allowed.")
     try:
         statements = [s for s in sqlglot.parse(sql, read=dialect) if s is not None]
     except ParseError as exc:

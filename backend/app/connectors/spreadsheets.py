@@ -16,7 +16,6 @@ from app.models import DataSource, SchemaDoc
 from app.rag.embeddings import embed_documents
 
 SCHEMA = "sheets"
-READER_ROLE = "chatbuilder_sheet_reader"
 MAX_ROWS_PER_SHEET = 1_000_000
 QUERY_TIMEOUT_MS = 10_000
 SAMPLE_VALUES = 3
@@ -88,13 +87,53 @@ def _describe(source: DataSource, sheet: str, table: str, df: pd.DataFrame, mult
     return description, columns
 
 
-def drop_sheet_tables(source: DataSource) -> None:
-    tables = [t["table"] for t in source.config.get("tables", [])]
-    if not tables:
-        return
+# Arbitrary key for a Postgres advisory lock. Concurrent GRANT/DROP ROLE statements
+# on the same schema fail with "tuple concurrently updated", so role changes are
+# serialized across workers.
+ROLE_LOCK_KEY = 726_361_501
+
+
+def source_role(source_id: uuid.UUID) -> str:
+    """Each spreadsheet source's queries run as its own role, which can read only its tables."""
+    return f"cb_sheet_{source_id.hex}"
+
+
+def ensure_source_role(source_id: uuid.UUID, tables: list[str]) -> None:
+    role = source_role(source_id)
     with engine.begin() as conn:
+        conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": ROLE_LOCK_KEY})
+        conn.execute(
+            text(
+                f"""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
+                        CREATE ROLE {role} NOLOGIN;
+                    END IF;
+                END
+                $$
+                """
+            )
+        )
+        conn.execute(text(f"GRANT USAGE ON SCHEMA {SCHEMA} TO {role}"))
+        for table in tables:
+            conn.execute(text(f'GRANT SELECT ON {SCHEMA}."{table}" TO {role}'))
+        conn.execute(text(f"GRANT {role} TO CURRENT_USER"))
+
+
+def drop_sheet_tables(source: DataSource) -> None:
+    if source.kind != "spreadsheet":
+        return
+    tables = [t["table"] for t in source.config.get("tables", [])]
+    role = source_role(source.id)
+    with engine.begin() as conn:
+        conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": ROLE_LOCK_KEY})
         for table in tables:
             conn.execute(text(f'DROP TABLE IF EXISTS {SCHEMA}."{table}"'))
+        exists = conn.scalar(text("SELECT 1 FROM pg_roles WHERE rolname = :r"), {"r": role})
+        if exists:
+            conn.execute(text(f"DROP OWNED BY {role}"))
+            conn.execute(text(f"DROP ROLE {role}"))
 
 
 async def ingest_spreadsheet(source: DataSource) -> dict:
@@ -121,6 +160,7 @@ async def ingest_spreadsheet(source: DataSource) -> dict:
         drop_sheet_tables(source)
         for _, table, df in prepared:
             df.to_sql(table, engine, schema=SCHEMA, if_exists="replace", index=False, chunksize=5000)
+        ensure_source_role(source.id, [table for _, table, _ in prepared])
         with SessionLocal() as db:
             db.query(SchemaDoc).filter(SchemaDoc.source_id == source.id).delete()
             for (sheet, table, _), (description, columns), vector in zip(prepared, descriptions, vectors, strict=True):
@@ -149,18 +189,27 @@ def run_sheet_query(source_id: uuid.UUID, sql: str, max_rows: int) -> str:
     """Runs model-written SQL against this source's tables only, as the read-only role."""
     with SessionLocal() as db:
         source = db.get(DataSource, source_id)
-        allowed = {t["table"].lower() for t in source.config.get("tables", [])}
+        tables = [t["table"] for t in source.config.get("tables", [])]
+    allowed = {t.lower() for t in tables}
     tree = check_select(sql, "spreadsheet")
     for schema, table in referenced_tables(tree):
         if schema not in ("", SCHEMA) or table not in allowed:
             name = f"{schema}.{table}" if schema else table
             raise PermissionError(f"Table {name} is not part of this spreadsheet. Use the tables listed.")
 
+    role = source_role(source_id)
+    with engine.connect() as conn:
+        has_role = conn.scalar(text("SELECT 1 FROM pg_roles WHERE rolname = :r"), {"r": role})
+    if not has_role:
+        # Sources processed before per-source roles existed.
+        ensure_source_role(source_id, tables)
+
     raw = engine.raw_connection()
     try:
         with raw.cursor() as cur:
             cur.execute("SET TRANSACTION READ ONLY")
-            cur.execute(f"SET LOCAL ROLE {READER_ROLE}")
+            # This role can read only this source's tables, whatever the SQL does.
+            cur.execute(f"SET LOCAL ROLE {role}")
             cur.execute(f"SET LOCAL statement_timeout = {QUERY_TIMEOUT_MS}")
             cur.execute(f"SET LOCAL search_path = {SCHEMA}")
             # No parameters are passed, so the SQL is sent exactly as written.
