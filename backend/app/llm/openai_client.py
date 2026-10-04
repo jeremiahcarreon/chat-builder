@@ -21,8 +21,9 @@ from app.providers import PROVIDERS, openai_compatible_client
 log = logging.getLogger(__name__)
 
 EMPTY_REPLY_NUDGE = (
-    "Your previous reply was empty. Answer the question. If you need data, call the tool "
-    "with valid JSON arguments."
+    "Your previous reply was empty. Answer the question. If you need data, call sql_query "
+    'with exactly two string arguments, for example {"source_id": "<source_id>", "sql": '
+    '"SELECT ..."}. Keep the SQL on one line and put single quotes around text values.'
 )
 
 
