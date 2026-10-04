@@ -8,7 +8,10 @@ tool_calls) are passed back exactly as the provider returned them.
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from app.llm.sampling import Sampling
 
 TextCallback = Callable[[str], Awaitable[None]]
 ResetCallback = Callable[[], Awaitable[None]]
@@ -64,10 +67,12 @@ class ChatSession(ABC):
         history: list[tuple[str, str]],
         user_message: str,
         max_tokens: int,
+        sampling: "Sampling | None" = None,
     ):
         self.model = model
         self.system = system
         self.max_tokens = max_tokens
+        self.sampling = sampling
         self._init_messages(history, user_message)
 
     @abstractmethod
@@ -90,11 +95,19 @@ class ChatSession(ABC):
 class LLMClient(ABC):
     @abstractmethod
     def session(
-        self, model: str, system: str, history: list[tuple[str, str]], user_message: str, max_tokens: int
+        self,
+        model: str,
+        system: str,
+        history: list[tuple[str, str]],
+        user_message: str,
+        max_tokens: int,
+        sampling: "Sampling | None" = None,
     ) -> ChatSession: ...
 
     @abstractmethod
-    async def complete(self, model: str, system: str, prompt: str, max_tokens: int) -> Completion:
+    async def complete(
+        self, model: str, system: str, prompt: str, max_tokens: int, sampling: "Sampling | None" = None
+    ) -> Completion:
         """A single non-streaming response with no tools (used by the classifier)."""
 
 

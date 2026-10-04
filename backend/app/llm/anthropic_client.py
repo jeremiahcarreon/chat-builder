@@ -15,6 +15,7 @@ from app.llm.base import (
     ToolResult,
     ToolSpec,
 )
+from app.llm.sampling import request_params
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +70,9 @@ class AnthropicSession(ChatSession):
             "messages": self.messages,
             "cache_control": {"type": "ephemeral"},
         }
+        # The 1.x SDK has no temperature argument; models that accept it get it in the body.
+        if params := request_params("anthropic", self.model, self.sampling):
+            kwargs["extra_body"] = params
         if tools:
             kwargs["tools"] = [
                 {
@@ -153,16 +157,18 @@ class AnthropicClient(LLMClient):
     def __init__(self, api_key: str):
         self.client = anthropic.AsyncAnthropic(api_key=api_key)
 
-    def session(self, model, system, history, user_message, max_tokens) -> ChatSession:
-        return AnthropicSession(self.client, model, system, history, user_message, max_tokens)
+    def session(self, model, system, history, user_message, max_tokens, sampling=None) -> ChatSession:
+        return AnthropicSession(self.client, model, system, history, user_message, max_tokens, sampling)
 
-    async def complete(self, model, system, prompt, max_tokens) -> Completion:
+    async def complete(self, model, system, prompt, max_tokens, sampling=None) -> Completion:
+        extra = request_params("anthropic", model, sampling)
         try:
             response = await self.client.messages.create(
                 model=model,
                 max_tokens=max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
+                **({"extra_body": extra} if extra else {}),
             )
         except anthropic.APIError as exc:
             raise _api_error(exc) from exc

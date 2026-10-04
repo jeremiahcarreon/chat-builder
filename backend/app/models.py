@@ -12,6 +12,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -112,6 +113,9 @@ class ChatApp(Base):
     classifier_fail_open: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true", nullable=False
     )
+    # Sampling: None uses the model's default. Sent only to models that accept it.
+    temperature: Mapped[float | None] = mapped_column(Float)
+    seed: Mapped[int | None] = mapped_column(Integer)
     max_answer_tokens: Mapped[int] = mapped_column(Integer, default=1024, nullable=False)
     messages_per_minute: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     daily_token_limit: Mapped[int] = mapped_column(Integer, default=200_000, nullable=False)

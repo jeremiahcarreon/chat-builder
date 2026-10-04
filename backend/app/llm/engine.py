@@ -24,6 +24,7 @@ from app.llm import context as context_module
 from app.llm.base import LLMClient, LLMError, ToolResult
 from app.llm.clients import client_for
 from app.llm.prompt import build_system_prompt, build_user_turn
+from app.llm.sampling import Sampling
 from app.models import ChatApp, Conversation, Message, UsageEvent
 from app.providers import ProviderError
 from app.routing import chat_model_for, load_cloud_switch
@@ -191,6 +192,7 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
         history=prep.history,
         user_message=build_user_turn(req.message, ctx.excerpts, ctx.table_descriptions),
         max_tokens=app.max_answer_tokens,
+        sampling=Sampling(app.temperature, app.seed),
     )
 
     queue: asyncio.Queue[dict | None] = asyncio.Queue()

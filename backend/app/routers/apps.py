@@ -25,6 +25,9 @@ class AppIn(BaseModel):
     out_of_scope: str = Field(default="", max_length=LONG_TEXT)
     refusal_message: str = Field(default="", max_length=2_000)
     strict_mode: bool = True
+    # None uses the model's default.
+    temperature: float | None = Field(default=None, ge=0.0, le=1.0)
+    seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
     max_answer_tokens: int = Field(default=4096, ge=64, le=64_000)
     messages_per_minute: int = Field(default=10, ge=1, le=600)
     daily_token_limit: int = Field(default=500_000, ge=1_000, le=1_000_000_000)

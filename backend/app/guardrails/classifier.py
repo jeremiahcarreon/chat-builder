@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 
 from app.llm.base import Completion, LLMClient
+from app.llm.sampling import CLASSIFIER_SAMPLING
 from app.models import ChatApp
 
 log = logging.getLogger(__name__)
@@ -158,6 +159,7 @@ async def classify(
         system=system_prompt(app, source_names),
         prompt=user_prompt(history, message),
         max_tokens=MAX_TOKENS,
+        sampling=CLASSIFIER_SAMPLING,
     )
     verdict, confidence, reason = parse(completion.text, topic_options(app, source_names), message)
     return Classification(verdict, confidence, reason, completion)

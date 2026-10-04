@@ -16,6 +16,7 @@ from app.llm.base import (
     ToolResult,
     ToolSpec,
 )
+from app.llm.sampling import request_params
 from app.providers import PROVIDERS, openai_compatible_client
 
 log = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ class OpenAISession(ChatSession):
             "stream": True,
             "stream_options": {"include_usage": True},
             **self._limit_kwargs(),
+            **request_params(self.provider, self.model, self.sampling),
         }
         if tools:
             kwargs["tools"] = [
@@ -162,16 +164,17 @@ class OpenAICompatibleClient(LLMClient):
         self.provider = provider
         self.client = openai_compatible_client(provider, api_key)
 
-    def session(self, model, system, history, user_message, max_tokens) -> ChatSession:
-        return OpenAISession(self.client, self.provider, model, system, history, user_message, max_tokens)
+    def session(self, model, system, history, user_message, max_tokens, sampling=None) -> ChatSession:
+        return OpenAISession(self.client, self.provider, model, system, history, user_message, max_tokens, sampling)
 
-    async def complete(self, model, system, prompt, max_tokens) -> Completion:
+    async def complete(self, model, system, prompt, max_tokens, sampling=None) -> Completion:
         limit = {"max_completion_tokens": max_tokens} if self.provider == "openai" else {"max_tokens": max_tokens}
         try:
             response = await self.client.chat.completions.create(
                 model=model,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
                 **limit,
+                **request_params(self.provider, model, sampling),
             )
         except openai.APIError as exc:
             raise _api_error(self.provider, exc) from exc

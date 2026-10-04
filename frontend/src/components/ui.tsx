@@ -69,7 +69,7 @@ export function Select({ className = "", ...props }: React.SelectHTMLAttributes<
 export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <label className="block space-y-1 text-sm">
-      <span className="font-medium">{label}</span>
+      <span className="block font-medium">{label}</span>
       {children}
       {hint && <span className="block text-xs text-slate-500">{hint}</span>}
     </label>
@@ -96,7 +96,7 @@ export function Toggle({
         onChange={(e) => onChange(e.target.checked)}
       />
       <span>
-        <span className="font-medium">{label}</span>
+        <span className="block font-medium">{label}</span>
         {hint && <span className="block text-xs text-slate-500">{hint}</span>}
       </span>
     </label>

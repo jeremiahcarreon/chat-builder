@@ -27,6 +27,8 @@ const blank: ChatAppInput = {
   classifier_model: null,
   classifier_strictness: "balanced",
   classifier_fail_open: true,
+  temperature: null,
+  seed: null,
 };
 
 type Tab = "settings" | "sources" | "chat";
@@ -204,6 +206,8 @@ function AppSettingsForm({ initial, appId }: { initial: ChatAppInput; appId?: st
           </Field>
         </div>
       </Card>
+
+      <ResponseStyleCard form={form} set={set} />
 
       <Card
         title="Personality and scope"
@@ -403,6 +407,80 @@ function GuardrailsCard({
               </Select>
             </Field>
           </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function ResponseStyleCard({
+  form,
+  set,
+}: {
+  form: ChatAppInput;
+  set: <K extends keyof ChatAppInput>(key: K, value: ChatAppInput[K]) => void;
+}) {
+  const { data: support } = useQuery({
+    queryKey: ["sampling", form.provider, form.model],
+    queryFn: () =>
+      api<{ temperature: boolean; seed: boolean; note: string }>(
+        `/api/settings/providers/${form.provider}/sampling?model=${encodeURIComponent(form.model)}`,
+      ),
+    enabled: !!form.model,
+    staleTime: Infinity,
+  });
+  const useDefault = form.temperature === null;
+  const value = form.temperature ?? 0.7;
+
+  return (
+    <Card
+      title="Response style"
+      description="Lower temperature gives consistent, predictable answers. Higher gives more varied, creative wording."
+    >
+      <div className="space-y-4">
+        <Toggle
+          checked={useDefault}
+          onChange={(v) => set("temperature", v ? null : 0.3)}
+          label="Use the model's default"
+        />
+        <div className={useDefault ? "pointer-events-none opacity-50" : ""}>
+          <div className="flex items-center justify-between text-sm">
+            <span className="font-medium">Temperature</span>
+            <span className="tabular-nums text-slate-600">{useDefault ? "default" : value.toFixed(2)}</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={value}
+            disabled={useDefault}
+            onChange={(e) => set("temperature", Number(e.target.value))}
+            className="mt-2 w-full accent-slate-900"
+            aria-label="Temperature"
+          />
+          <div className="flex justify-between text-xs text-slate-500">
+            <span>Precise and consistent</span>
+            <span>Varied and creative</span>
+          </div>
+        </div>
+        <Field
+          label="Seed (optional)"
+          hint="With a low temperature, the same seed and question give the same answer, which is useful when testing prompt changes."
+        >
+          <Input
+            type="number"
+            min={0}
+            placeholder="None"
+            value={form.seed ?? ""}
+            onChange={(e) => set("seed", e.target.value === "" ? null : Math.max(0, Math.floor(Number(e.target.value))))}
+            className="sm:w-48"
+          />
+        </Field>
+        {support && support.note && (
+          <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            {support.note} {!support.temperature && !support.seed ? "These settings are saved but have no effect with this model." : ""}
+          </p>
         )}
       </div>
     </Card>

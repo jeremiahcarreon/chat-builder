@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from app.crypto import decrypt, encrypt
 from app.deps import CurrentUser, DbSession
+from app.llm.sampling import support
 from app.models import ProviderKey
 from app.providers import (
     PROVIDERS,
@@ -135,3 +136,17 @@ async def provider_models(provider: str, db: DbSession, user: CurrentUser) -> li
         return await list_models(provider, get_api_key(db, user.id, provider))
     except ProviderError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+
+
+class SamplingSupportOut(BaseModel):
+    temperature: bool
+    seed: bool
+    note: str
+
+
+@router.get("/{provider}/sampling")
+def sampling_support(provider: str, model: str, _: CurrentUser) -> SamplingSupportOut:
+    """Whether a model accepts temperature and seed, for the app editor's slider."""
+    _check_provider(provider)
+    result = support(provider, model)
+    return SamplingSupportOut(temperature=result.temperature, seed=result.seed, note=result.note)
