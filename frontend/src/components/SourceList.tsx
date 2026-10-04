@@ -36,15 +36,21 @@ function StatusBadge({ source }: { source: DataSource }) {
   );
 }
 
+function fileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function summary(source: DataSource): string {
   const d = source.details;
   const parts: string[] = [KIND_LABELS[source.kind] ?? source.kind];
   if (d.host) parts.push(`${d.host}${d.port ? `:${d.port}` : ""}${d.database ? ` / ${d.database}` : ""}`);
-  if (typeof d.size === "number") parts.push(`${(d.size / 1024).toFixed(d.size < 10240 ? 1 : 0)} KB`);
-  if (d.page_count) parts.push(`${d.page_count} pages`);
-  if (d.chunk_count) parts.push(`${d.chunk_count} passages`);
+  if (typeof d.size === "number") parts.push(fileSize(d.size));
+  if (d.page_count) parts.push(`${d.page_count} page${d.page_count === 1 ? "" : "s"}`);
+  if (d.chunk_count) parts.push(`${d.chunk_count} passage${d.chunk_count === 1 ? "" : "s"}`);
   if (d.table_count) parts.push(`${d.table_count} table${d.table_count === 1 ? "" : "s"}`);
-  if (d.row_count) parts.push(`${Number(d.row_count).toLocaleString()} rows`);
+  if (d.row_count) parts.push(`${Number(d.row_count).toLocaleString()} row${d.row_count === 1 ? "" : "s"}`);
   return parts.join(" · ");
 }
 
