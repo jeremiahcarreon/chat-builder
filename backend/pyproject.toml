@@ -26,6 +26,10 @@ dependencies = [
     "pymysql>=1.2.3",
     "pymssql>=2.4.2",
     "sqlglot>=30.21.0",
+    "rapidocr>=3.9.2",
+    "onnxruntime>=1.30.0",
+    "pypdfium2>=5.14.0",
+    "opencv-python-headless>=5.0.0.93",
 ]
 
 [dependency-groups]
@@ -33,6 +37,9 @@ dev = ["pytest>=8", "pgserver>=0.1"]
 
 [tool.uv]
 package = false
+# RapidOCR depends on the desktop OpenCV build, which needs X11/OpenGL libraries the
+# slim container doesn't have. The headless build provides the same cv2 module.
+override-dependencies = ["opencv-python; sys_platform == 'never'"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

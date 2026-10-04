@@ -6,7 +6,7 @@ import { DatabaseForm } from "../components/DatabaseForm";
 import { isBusy, SourceList } from "../components/SourceList";
 import { Card } from "../components/ui";
 
-const ACCEPT = ".pdf,.docx,.txt,.md,.markdown,.html,.htm,.xlsx,.xlsm,.csv,.db,.sqlite,.sqlite3";
+const ACCEPT = ".pdf,.docx,.txt,.md,.markdown,.html,.htm,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp,.xlsx,.xlsm,.csv,.db,.sqlite,.sqlite3";
 
 export function DataSourcesTab({ appId }: { appId: string }) {
   const queryClient = useQueryClient();
@@ -47,7 +47,7 @@ export function DataSourcesTab({ appId }: { appId: string }) {
     <div className="space-y-6">
       <Card
         title="Upload files"
-        description="Documents (PDF, Word, text, Markdown, HTML) are searched automatically. Spreadsheets (Excel, CSV) and SQLite files become tables the assistant can query."
+        description="Documents (PDF, Word, text, Markdown, HTML, and scanned PDFs or images, which are read with OCR) are searched automatically. Spreadsheets (Excel, CSV) and SQLite files become tables the assistant can query."
       >
         <div
           onDragOver={(e) => {

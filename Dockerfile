@@ -18,6 +18,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /usr/local/bin/uv
 WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev
+# Download the OCR models at build time so scanned documents work without internet access.
+RUN python -c "from rapidocr import RapidOCR; RapidOCR()"
 
 COPY backend/ ./
 COPY --from=frontend /frontend/dist ./static

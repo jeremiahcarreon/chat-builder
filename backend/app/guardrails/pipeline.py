@@ -14,7 +14,7 @@ from app.guardrails.limits import check_limits
 from app.llm.base import LLMError
 from app.llm.clients import client_for
 from app.llm.prompt import refusal_message
-from app.models import ChatApp, DataSource, SchemaDoc, UsageEvent
+from app.models import ChatApp, Chunk, DataSource, SchemaDoc, UsageEvent
 from app.providers import PROVIDERS, ProviderError
 
 log = logging.getLogger(__name__)
@@ -66,10 +66,18 @@ def _setup(app: ChatApp, provider: str):
         ):
             names = [c.get("name", "") for c in columns or []][:MAX_COLUMNS_LISTED]
             tables.setdefault(source_id, []).append(f"{table_name.rsplit('.', 1)[-1]} ({', '.join(names)})")
+        # The opening line of each document says what it's about better than its file name.
+        openings = {
+            source_id: content
+            for source_id, content in db.execute(
+                select(Chunk.source_id, Chunk.content).where(Chunk.app_id == app.id, Chunk.ordinal == 0)
+            )
+        }
         lines = []
         for source_id, kind, name in sources:
             if kind == "file":
-                lines.append(f"document {name}")
+                first = next((ln.strip() for ln in openings.get(source_id, "").splitlines() if ln.strip()), "")
+                lines.append(f"document {name}" + (f": {first[:100]}" if first else ""))
             else:
                 lines.append(f"{name}: tables " + "; ".join(tables.get(source_id, [])[:5]))
         return client_for(db, app.owner_id, provider), lines[:MAX_DATA_LINES]
