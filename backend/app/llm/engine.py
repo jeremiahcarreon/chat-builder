@@ -200,12 +200,20 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
         await queue.put({"type": "reset"})
 
     async def converse() -> None:
+        retried_empty = False
         try:
             for round_number in range(MAX_TOOL_ROUNDS + 1):
                 result = await session.step(tools, on_text, on_reset)
                 prep.usage.append(
                     _usage_event(app, "chat", app.provider, app.model, result.input_tokens, result.output_tokens)
                 )
+                empty = result.stop_reason == "end" and not result.text.strip() and not result.tool_calls
+                if empty and not retried_empty and session.retry_empty():
+                    retried_empty = True
+                    result = await session.step(tools, on_text, on_reset)
+                    prep.usage.append(
+                        _usage_event(app, "chat", app.provider, app.model, result.input_tokens, result.output_tokens)
+                    )
                 if result.stop_reason == "refusal":
                     await on_text("\n\nI can't help with that request.")
                     meta["refused"] = True

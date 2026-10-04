@@ -10,8 +10,8 @@ import { Apps } from "./pages/Apps";
 import { ChatPage } from "./pages/ChatPage";
 import { DataSources } from "./pages/DataSources";
 import { Login } from "./pages/Login";
-import { Placeholder } from "./pages/Placeholder";
 import { Settings } from "./pages/Settings";
+import { Usage } from "./pages/Usage";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -37,7 +37,7 @@ function Dashboard() {
         <Route path="/apps" element={<Apps />} />
         <Route path="/apps/:appId" element={<AppEditor />} />
         <Route path="/sources" element={<DataSources />} />
-        <Route path="/usage" element={<Placeholder title="Usage" step={6} />} />
+        <Route path="/usage" element={<Usage />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/apps" replace />} />
       </Route>

@@ -17,6 +17,10 @@ log = logging.getLogger(__name__)
 TABLES_PER_TURN = 8
 # Below this many tables, every table is listed regardless of relevance.
 LIST_ALL_BELOW = 12
+# If no table is at least this close to the question, the turn gets no tables and no
+# query tool. Unrelated table lists made smaller models refuse in-scope questions
+# ("that isn't in the data"). Data questions score around 0.6-0.7; unrelated ones 0.9+.
+MAX_TABLE_DISTANCE = 0.85
 MAX_SQL_CHARS = 10_000
 
 DIALECT_NAMES = {
@@ -60,6 +64,13 @@ def relevant_tables(app_id: uuid.UUID, query_vector: list[float]) -> list[str]:
             .join(DataSource, DataSource.id == SchemaDoc.source_id)
             .where(SchemaDoc.app_id == app_id, DataSource.status == "ready")
         )
+        closest = db.scalar(
+            select(func.min(SchemaDoc.embedding.cosine_distance(query_vector)))
+            .join(DataSource, DataSource.id == SchemaDoc.source_id)
+            .where(SchemaDoc.app_id == app_id, DataSource.status == "ready")
+        )
+        if closest is None or closest > MAX_TABLE_DISTANCE:
+            return []
         total = db.scalar(select(func.count()).select_from(ready.subquery()))
         if total <= LIST_ALL_BELOW:
             rows = db.execute(ready.order_by(SchemaDoc.source_id, SchemaDoc.table_name)).all()

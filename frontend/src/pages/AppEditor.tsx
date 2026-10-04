@@ -22,6 +22,11 @@ const blank: ChatAppInput = {
   messages_per_minute: 10,
   daily_token_limit: 500000,
   is_public: false,
+  classifier_enabled: true,
+  classifier_provider: null,
+  classifier_model: null,
+  classifier_strictness: "balanced",
+  classifier_fail_open: true,
 };
 
 type Tab = "settings" | "sources" | "chat";
@@ -232,6 +237,8 @@ function AppSettingsForm({ initial, appId }: { initial: ChatAppInput; appId?: st
         </div>
       </Card>
 
+      <GuardrailsCard form={form} set={set} providers={providers} />
+
       <Card title="Limits and sharing">
         <div className="grid gap-4 sm:grid-cols-3">
           <Field label="Max answer length (tokens)">
@@ -289,5 +296,102 @@ function AppSettingsForm({ initial, appId }: { initial: ChatAppInput; appId?: st
         )}
       </div>
     </form>
+  );
+}
+
+function GuardrailsCard({
+  form,
+  set,
+  providers,
+}: {
+  form: ChatAppInput;
+  set: <K extends keyof ChatAppInput>(key: K, value: ChatAppInput[K]) => void;
+  providers: ProviderKey[] | undefined;
+}) {
+  const ownProvider = providers?.find((p) => p.provider === form.provider);
+  const classifierProvider = providers?.find((p) => p.provider === (form.classifier_provider ?? form.provider));
+  const { data: models } = useQuery({
+    queryKey: ["models", classifierProvider?.provider],
+    queryFn: () => api<string[]>(`/api/settings/providers/${classifierProvider?.provider}/models`),
+    enabled: !!classifierProvider?.configured,
+    staleTime: 5 * 60_000,
+  });
+
+  return (
+    <Card
+      title="Guardrails"
+      description="A fast System 1 classifier screens every message before the main model sees it. Off-topic and abusive messages get the refusal message and never reach the main model."
+    >
+      <div className="space-y-4">
+        <Toggle
+          checked={form.classifier_enabled}
+          onChange={(v) => set("classifier_enabled", v)}
+          label="Screen messages with the classifier"
+          hint="Recommended for public apps. Adds a small, fast model call before each answer."
+        />
+        {form.classifier_enabled && (
+          <>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="Strictness">
+                <Select
+                  value={form.classifier_strictness}
+                  onChange={(e) => set("classifier_strictness", e.target.value as ChatAppInput["classifier_strictness"])}
+                >
+                  <option value="lenient">Lenient: block only clear misuse</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="strict">Strict: only clearly in-scope questions</option>
+                </Select>
+              </Field>
+              <Field label="Classifier provider" hint="Blank uses the app's own provider.">
+                <Select
+                  value={form.classifier_provider ?? ""}
+                  onChange={(e) => {
+                    set("classifier_provider", e.target.value || null);
+                    set("classifier_model", null);
+                  }}
+                >
+                  <option value="">Same as the app ({ownProvider?.label ?? form.provider})</option>
+                  {providers?.map((p) => (
+                    <option key={p.provider} value={p.provider}>
+                      {p.label}
+                      {p.configured ? "" : " (no key yet)"}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field
+                label="Classifier model"
+                hint={
+                  classifierProvider?.default_classifier_model
+                    ? `Blank uses ${classifierProvider.default_classifier_model}.`
+                    : classifierProvider?.provider === form.provider
+                      ? "Blank uses the app's own model."
+                      : "Required for this provider."
+                }
+              >
+                <Input
+                  list="classifier-model-options"
+                  placeholder={classifierProvider?.default_classifier_model}
+                  value={form.classifier_model ?? ""}
+                  onChange={(e) => set("classifier_model", e.target.value || null)}
+                />
+                <datalist id="classifier-model-options">
+                  {models?.map((m) => <option key={m} value={m} />)}
+                </datalist>
+              </Field>
+            </div>
+            <Field label="If the classifier is unavailable">
+              <Select
+                value={form.classifier_fail_open ? "open" : "closed"}
+                onChange={(e) => set("classifier_fail_open", e.target.value === "open")}
+              >
+                <option value="open">Let the message through (keeps the app working)</option>
+                <option value="closed">Block the message (safer for public apps)</option>
+              </Select>
+            </Field>
+          </>
+        )}
+      </div>
+    </Card>
   );
 }

@@ -35,7 +35,12 @@ def build_system_prompt(app: ChatApp, has_documents: bool, data_tools: bool) -> 
     )
     parts.append("\n".join(scope))
 
-    knowledge = ["## Using information"]
+    knowledge = [
+        "## Using information",
+        "The documents and data attached to this app are resources, not the limits of your "
+        "scope. Whether a question is in scope depends only on the Scope section above, even "
+        "when the attached material doesn't cover it.",
+    ]
     if has_documents:
         knowledge.append(
             "Each user message may include reference excerpts from the app's documents inside "
@@ -78,4 +83,8 @@ def build_user_turn(question: str, excerpts: list[tuple[str, str]], tables: list
         sections.append("<available_tables>\n" + "\n\n".join(tables) + "\n</available_tables>")
     if not sections:
         return question
-    return "\n\n".join(sections) + f"\n\n<question>\n{question}\n</question>"
+    return (
+        "Context retrieved for this question (use it only if it's relevant):\n\n"
+        + "\n\n".join(sections)
+        + f"\n\n<question>\n{question}\n</question>"
+    )

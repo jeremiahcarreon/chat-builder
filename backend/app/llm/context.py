@@ -76,7 +76,8 @@ async def gather(app: ChatApp, question: str, history: list[tuple[str, str]]) ->
 
 
 def tools_for(ctx: TurnContext) -> list[ToolSpec]:
-    if not ctx.queryable:
+    # Offered only when this turn has relevant tables to query.
+    if not ctx.queryable or not ctx.table_descriptions:
         return []
     from app.connectors.query import SQL_TOOL
 

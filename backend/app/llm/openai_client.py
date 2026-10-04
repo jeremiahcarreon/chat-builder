@@ -20,6 +20,11 @@ from app.providers import PROVIDERS, openai_compatible_client
 
 log = logging.getLogger(__name__)
 
+EMPTY_REPLY_NUDGE = (
+    "Your previous reply was empty. Answer the question. If you need data, call the tool "
+    "with valid JSON arguments."
+)
+
 
 def _api_error(provider: str, exc: openai.APIError) -> LLMError:
     label = PROVIDERS[provider].label
@@ -124,7 +129,8 @@ class OpenAISession(ChatSession):
                 native["extra_content"] = entry["extra"]
             native_calls.append(native)
 
-        assistant: dict = {"role": "assistant", "content": text or None}
+        # Content may be null only alongside tool calls; Ollama rejects a null-content message.
+        assistant: dict = {"role": "assistant", "content": text or (None if native_calls else "")}
         if native_calls:
             assistant["tool_calls"] = native_calls
         self.messages.append(assistant)
@@ -136,6 +142,14 @@ class OpenAISession(ChatSession):
         if tool_calls:
             return StepResult(text, tool_calls, "tool_use", input_tokens, output_tokens)
         return StepResult(text, [], "end", input_tokens, output_tokens)
+
+    def retry_empty(self) -> bool:
+        # Some local models emit a malformed tool call that the server discards, leaving
+        # an empty reply. Drop it and ask once more.
+        if self.messages and self.messages[-1].get("role") == "assistant" and not self.messages[-1].get("content"):
+            self.messages.pop()
+        self.messages.append({"role": "user", "content": EMPTY_REPLY_NUDGE})
+        return True
 
     def add_tool_results(self, results: list[ToolResult]) -> None:
         for r in results:

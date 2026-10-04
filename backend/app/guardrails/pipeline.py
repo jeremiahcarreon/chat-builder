@@ -14,7 +14,7 @@ from app.guardrails.limits import check_limits
 from app.llm.base import LLMError
 from app.llm.clients import client_for
 from app.llm.prompt import refusal_message
-from app.models import ChatApp, DataSource, UsageEvent
+from app.models import ChatApp, DataSource, SchemaDoc, UsageEvent
 from app.providers import PROVIDERS, ProviderError
 
 log = logging.getLogger(__name__)
@@ -28,21 +28,51 @@ class Verdict:
     usage: list[UsageEvent] = field(default_factory=list)
 
 
+class ClassifierSetupError(ClassifierError):
+    """The app's classifier settings are incomplete."""
+
+
 def classifier_choice(app: ChatApp) -> tuple[str, str]:
     """The (provider, model) used to screen this app's messages."""
     provider = app.classifier_provider or app.provider
-    model = (app.classifier_model or "").strip() or PROVIDERS[provider].default_classifier_model or app.model
-    return provider, model
+    explicit = (app.classifier_model or "").strip()
+    if explicit:
+        return provider, explicit
+    if PROVIDERS[provider].default_classifier_model:
+        return provider, PROVIDERS[provider].default_classifier_model
+    # No suggested model (local Ollama): the app's own model, if it's on the same provider.
+    if provider == app.provider:
+        return provider, app.model
+    raise ClassifierSetupError(
+        f"Choose a classifier model for {PROVIDERS[provider].label} in the app's Guardrails settings."
+    )
+
+
+MAX_DATA_LINES = 20
+MAX_COLUMNS_LISTED = 12
 
 
 def _setup(app: ChatApp, provider: str):
+    """The classifier client, plus one line per data source describing what it holds."""
     with SessionLocal() as db:
-        names = list(
-            db.scalars(
-                select(DataSource.name).where(DataSource.app_id == app.id, DataSource.status == "ready")
+        sources = db.execute(
+            select(DataSource.id, DataSource.kind, DataSource.name).where(
+                DataSource.app_id == app.id, DataSource.status == "ready"
             )
-        )
-        return client_for(db, app.owner_id, provider), names
+        ).all()
+        tables: dict = {}
+        for source_id, table_name, columns in db.execute(
+            select(SchemaDoc.source_id, SchemaDoc.table_name, SchemaDoc.columns).where(SchemaDoc.app_id == app.id)
+        ):
+            names = [c.get("name", "") for c in columns or []][:MAX_COLUMNS_LISTED]
+            tables.setdefault(source_id, []).append(f"{table_name.rsplit('.', 1)[-1]} ({', '.join(names)})")
+        lines = []
+        for source_id, kind, name in sources:
+            if kind == "file":
+                lines.append(f"document {name}")
+            else:
+                lines.append(f"{name}: tables " + "; ".join(tables.get(source_id, [])[:5]))
+        return client_for(db, app.owner_id, provider), lines[:MAX_DATA_LINES]
 
 
 async def check_message(
@@ -59,8 +89,8 @@ async def check_message(
     if not app.classifier_enabled:
         return Verdict(True)
 
-    provider, model = classifier_choice(app)
     try:
+        provider, model = classifier_choice(app)
         client, source_names = await asyncio.to_thread(_setup, app, provider)
         result = await classify(client, model, app, source_names, history, message)
     except (ProviderError, LLMError, ClassifierError) as exc:

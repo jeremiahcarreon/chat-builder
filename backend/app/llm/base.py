@@ -82,6 +82,10 @@ class ChatSession(ABC):
     @abstractmethod
     def add_tool_results(self, results: list[ToolResult]) -> None: ...
 
+    def retry_empty(self) -> bool:
+        """After an empty reply (no text, no tool calls), prepare one retry. False if unsupported."""
+        return False
+
 
 class LLMClient(ABC):
     @abstractmethod

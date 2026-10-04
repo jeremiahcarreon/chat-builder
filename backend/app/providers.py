@@ -53,8 +53,8 @@ PROVIDERS: dict[str, Provider] = {
             "Local models (Ollama)",
             "",
             needs_key=False,
-            default_model="llama3.2",
-            default_classifier_model="llama3.2",
+            # Local models are whatever has been pulled into Ollama, so there is
+            # no safe default; the app's own model is used for the classifier.
         ),
     ]
 }

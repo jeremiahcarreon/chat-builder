@@ -66,6 +66,11 @@ export interface ChatAppInput {
   messages_per_minute: number;
   daily_token_limit: number;
   is_public: boolean;
+  classifier_enabled: boolean;
+  classifier_provider: string | null;
+  classifier_model: string | null;
+  classifier_strictness: "lenient" | "balanced" | "strict";
+  classifier_fail_open: boolean;
 }
 
 export interface ChatApp extends ChatAppInput {
@@ -181,4 +186,26 @@ export async function uploadFiles(appId: string, files: File[]): Promise<DataSou
     throw new ApiError(response.status, message);
   }
   return response.json();
+}
+
+export interface UsageReport {
+  days: number;
+  input_tokens: number;
+  output_tokens: number;
+  questions: number;
+  blocked: number;
+  conversations: number;
+  by_day: { date: string; input_tokens: number; output_tokens: number }[];
+  by_app: {
+    app_id: string;
+    name: string;
+    input_tokens: number;
+    output_tokens: number;
+    questions: number;
+    blocked: number;
+    tokens_today: number;
+    daily_token_limit: number;
+  }[];
+  by_model: { kind: string; provider: string; model: string; requests: number; input_tokens: number; output_tokens: number }[];
+  recent_blocked: { app_id: string; app_name: string; question: string; verdict: string; reason: string; created_at: string }[];
 }
