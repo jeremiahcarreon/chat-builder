@@ -10,7 +10,8 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import User
-from app.routers import apps, auth, chat, provider_keys, system
+from app.queue import queue
+from app.routers import apps, auth, chat, provider_keys, sources, system
 from app.security import hash_password
 
 log = logging.getLogger(__name__)
@@ -30,7 +31,9 @@ def ensure_admin() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     ensure_admin()
-    yield
+    # Lets API requests queue background jobs.
+    async with queue.open_async():
+        yield
 
 
 app = FastAPI(title="Chat Builder", lifespan=lifespan)
@@ -38,6 +41,7 @@ app.include_router(auth.router)
 app.include_router(apps.router)
 app.include_router(chat.router)
 app.include_router(provider_keys.router)
+app.include_router(sources.router)
 app.include_router(system.router)
 
 # Serve the built React app, with client-side routes falling back to index.html.

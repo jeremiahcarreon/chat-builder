@@ -173,7 +173,7 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
         yield {"type": "done", "message_id": message_id}
         return
 
-    ctx = await context_module.gather(app, req.message)
+    ctx = await context_module.gather(app, req.message, prep.history)
     tools = context_module.tools_for(ctx)
     session = prep.client.session(
         model=app.model,

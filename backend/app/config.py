@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     static_dir: str = "/app/static"
     upload_dir: str = "/data/uploads"
+    max_upload_mb: int = 50
 
     @field_validator("master_key")
     @classmethod

@@ -1,4 +1,4 @@
-"""Background worker: runs queued jobs (document ingestion from step 3 on).
+"""Background worker: runs queued jobs such as document ingestion (see app/tasks.py).
 
 Also reports a heartbeat for the status panel and makes sure the embedding
 model is downloaded into Ollama.
@@ -9,30 +9,16 @@ import logging
 from datetime import UTC, datetime
 
 import httpx
-import procrastinate
 from sqlalchemy.dialects.postgresql import insert
 
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import ServiceHeartbeat
+from app.queue import queue
 
 log = logging.getLogger("worker")
 
 HEARTBEAT_SECONDS = 15
-
-
-def _conninfo() -> str:
-    # Procrastinate takes a plain libpq URL, not SQLAlchemy's "+psycopg" form.
-    return get_settings().database_url.replace("postgresql+psycopg://", "postgresql://", 1)
-
-
-app = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=_conninfo()))
-
-
-@app.task(name="ping")
-async def ping() -> str:
-    """Trivial task proving the queue works end to end."""
-    return "pong"
 
 
 def _beat() -> None:
@@ -82,8 +68,9 @@ async def ensure_embedding_model() -> None:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     background = [asyncio.create_task(heartbeat()), asyncio.create_task(ensure_embedding_model())]
-    async with app.open_async():
-        await app.run_worker_async()
+    async with queue.open_async():
+        # Two documents can be processed at once; embedding is the slow part.
+        await queue.run_worker_async(concurrency=2)
     for task in background:
         task.cancel()
 

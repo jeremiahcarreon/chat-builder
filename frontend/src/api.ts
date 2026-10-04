@@ -147,3 +147,38 @@ export async function streamChat(
     }
   }
 }
+
+export interface DataSource {
+  id: string;
+  app_id: string;
+  app_name: string | null;
+  kind: string;
+  name: string;
+  status: "pending" | "processing" | "ready" | "failed";
+  error: string | null;
+  details: Record<string, string | number | boolean | null>;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Uploads files as multipart form data (no JSON content type). */
+export async function uploadFiles(appId: string, files: File[]): Promise<DataSource[]> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file);
+  const response = await fetch(`/api/apps/${appId}/sources/upload`, {
+    method: "POST",
+    credentials: "same-origin",
+    body: form,
+  });
+  if (!response.ok) {
+    let message = response.statusText;
+    try {
+      const body = await response.json();
+      if (typeof body.detail === "string") message = body.detail;
+    } catch {
+      // keep status text
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}

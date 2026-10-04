@@ -8,6 +8,7 @@ import "./index.css";
 import { AppEditor } from "./pages/AppEditor";
 import { Apps } from "./pages/Apps";
 import { ChatPage } from "./pages/ChatPage";
+import { DataSources } from "./pages/DataSources";
 import { Login } from "./pages/Login";
 import { Placeholder } from "./pages/Placeholder";
 import { Settings } from "./pages/Settings";
@@ -35,7 +36,7 @@ function Dashboard() {
       <Route element={<Layout />}>
         <Route path="/apps" element={<Apps />} />
         <Route path="/apps/:appId" element={<AppEditor />} />
-        <Route path="/sources" element={<Placeholder title="Data Sources" step={3} />} />
+        <Route path="/sources" element={<DataSources />} />
         <Route path="/usage" element={<Placeholder title="Usage" step={6} />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/apps" replace />} />
