@@ -209,3 +209,11 @@ export interface UsageReport {
   by_model: { kind: string; provider: string; model: string; requests: number; input_tokens: number; output_tokens: number }[];
   recent_blocked: { app_id: string; app_name: string; question: string; verdict: string; reason: string; created_at: string }[];
 }
+
+export interface CloudSwitch {
+  enabled: boolean;
+  provider: "anthropic" | "openai" | "gemini";
+  chat_model: string;
+  classifier_model: string;
+  local_app_count: number;
+}

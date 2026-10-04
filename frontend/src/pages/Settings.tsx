@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { api, type ProviderKey, type ServiceStatus } from "../api";
+import { CloudSwitchCard } from "../components/CloudSwitchCard";
 import { Button, Card, Input, StatusDot } from "../components/ui";
 
 export function Settings() {
@@ -9,6 +10,7 @@ export function Settings() {
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Settings</h1>
       <ProviderKeys />
+      <CloudSwitchCard />
       <SystemStatus />
     </div>
   );

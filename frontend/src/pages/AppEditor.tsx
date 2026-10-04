@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { api, type ChatApp, type ChatAppInput, type ProviderKey } from "../api";
+import { api, type ChatApp, type ChatAppInput, type CloudSwitch, type ProviderKey } from "../api";
 import { ChatPanel } from "../components/ChatPanel";
 import { Button, Card, Field, Input, Select, Tabs, Textarea, Toggle } from "../components/ui";
 import { DataSourcesTab } from "./DataSourcesTab";
@@ -100,6 +100,10 @@ function AppSettingsForm({ initial, appId }: { initial: ChatAppInput; appId?: st
     queryFn: () => api<ProviderKey[]>("/api/settings/providers"),
   });
   const provider = providers?.find((p) => p.provider === form.provider);
+  const { data: cloudSwitch } = useQuery({
+    queryKey: ["cloud-switch"],
+    queryFn: () => api<CloudSwitch>("/api/settings/cloud-switch"),
+  });
   const { data: models, error: modelsError } = useQuery({
     queryKey: ["models", form.provider],
     queryFn: () => api<string[]>(`/api/settings/providers/${form.provider}/models`),
@@ -151,6 +155,15 @@ function AppSettingsForm({ initial, appId }: { initial: ChatAppInput; appId?: st
       </Card>
 
       <Card title="Model">
+        {cloudSwitch?.enabled && form.provider === "ollama" && (
+          <p className="mb-4 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+            The cloud switch in Settings is on, so this local-model app currently answers with{" "}
+            <strong>
+              {cloudSwitch.provider} {cloudSwitch.chat_model}
+            </strong>
+            . Turn the switch off to return to {form.model}.
+          </p>
+        )}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Provider">
             <Select

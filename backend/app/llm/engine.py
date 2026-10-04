@@ -26,6 +26,7 @@ from app.llm.clients import client_for
 from app.llm.prompt import build_system_prompt, build_user_turn
 from app.models import ChatApp, Conversation, Message, UsageEvent
 from app.providers import ProviderError
+from app.routing import chat_model_for, load_cloud_switch
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,10 @@ class Prepared:
     history: list[tuple[str, str]]
     client: LLMClient | None = None
     setup_error: str | None = None
+    # The provider and model actually answering (differs from the app's own when the
+    # cloud switch is moving local-model apps to a cloud provider).
+    provider: str = ""
+    model: str = ""
     usage: list[UsageEvent] = field(default_factory=list)
 
 
@@ -115,8 +120,9 @@ def _prepare(req: ChatRequest) -> Prepared:
             user_message_id=user_msg.id,
             history=history_for(db, conversation.id, user_msg.id),
         )
+        prepared.provider, prepared.model = chat_model_for(app, load_cloud_switch(db, app.owner_id))
         try:
-            prepared.client = client_for(db, app.owner_id, app.provider)
+            prepared.client = client_for(db, app.owner_id, prepared.provider)
         except ProviderError as exc:
             prepared.setup_error = str(exc)
         db.expunge(app)
@@ -180,7 +186,7 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
     ctx = await context_module.gather(app, req.message, prep.history)
     tools = context_module.tools_for(ctx)
     session = prep.client.session(
-        model=app.model,
+        model=prep.model,
         system=build_system_prompt(app, ctx.has_documents, bool(tools)),
         history=prep.history,
         user_message=build_user_turn(req.message, ctx.excerpts, ctx.table_descriptions),
@@ -205,14 +211,14 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
             for round_number in range(MAX_TOOL_ROUNDS + 1):
                 result = await session.step(tools, on_text, on_reset)
                 prep.usage.append(
-                    _usage_event(app, "chat", app.provider, app.model, result.input_tokens, result.output_tokens)
+                    _usage_event(app, "chat", prep.provider, prep.model, result.input_tokens, result.output_tokens)
                 )
                 empty = result.stop_reason == "end" and not result.text.strip() and not result.tool_calls
                 if empty and not retried_empty and session.retry_empty():
                     retried_empty = True
                     result = await session.step(tools, on_text, on_reset)
                     prep.usage.append(
-                        _usage_event(app, "chat", app.provider, app.model, result.input_tokens, result.output_tokens)
+                        _usage_event(app, "chat", prep.provider, prep.model, result.input_tokens, result.output_tokens)
                     )
                 if result.stop_reason == "refusal":
                     await on_text("\n\nI can't help with that request.")

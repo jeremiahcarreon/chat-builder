@@ -1,10 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { Globe, Lock, Plus } from "lucide-react";
 import { Link } from "react-router";
-import { api, type ChatApp } from "../api";
+import { api, type ChatApp, type CloudSwitch } from "../api";
 
 export function Apps() {
   const { data: apps, isLoading } = useQuery({ queryKey: ["apps"], queryFn: () => api<ChatApp[]>("/api/apps") });
+  const { data: cloudSwitch } = useQuery({
+    queryKey: ["cloud-switch"],
+    queryFn: () => api<CloudSwitch>("/api/settings/cloud-switch"),
+  });
 
   return (
     <div className="space-y-6">
@@ -42,7 +46,16 @@ export function Apps() {
               </div>
               <p className="mt-1 line-clamp-2 text-sm text-slate-500">{app.description || "No description"}</p>
               <p className="mt-3 text-xs text-slate-500">
-                {app.provider} · {app.model} · {app.source_count} data source{app.source_count === 1 ? "" : "s"} ·{" "}
+                {cloudSwitch?.enabled && app.provider === "ollama" ? (
+                  <span title={`Local model ${app.model}, moved to the cloud by the switch in Settings`}>
+                    {cloudSwitch.provider} · {cloudSwitch.chat_model} (cloud switch)
+                  </span>
+                ) : (
+                  <>
+                    {app.provider} · {app.model}
+                  </>
+                )}{" "}
+                · {app.source_count} data source{app.source_count === 1 ? "" : "s"} ·{" "}
                 {app.conversation_count} conversation{app.conversation_count === 1 ? "" : "s"}
               </p>
             </Link>

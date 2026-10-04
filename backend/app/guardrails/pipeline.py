@@ -16,6 +16,7 @@ from app.llm.clients import client_for
 from app.llm.prompt import refusal_message
 from app.models import ChatApp, Chunk, DataSource, SchemaDoc, UsageEvent
 from app.providers import PROVIDERS, ProviderError
+from app.routing import CloudSwitch, classifier_for, load_cloud_switch
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,11 @@ def classifier_choice(app: ChatApp) -> tuple[str, str]:
 
 MAX_DATA_LINES = 20
 MAX_COLUMNS_LISTED = 12
+
+
+def _cloud_switch(owner_id: uuid.UUID) -> CloudSwitch:
+    with SessionLocal() as db:
+        return load_cloud_switch(db, owner_id)
 
 
 def _setup(app: ChatApp, provider: str):
@@ -98,7 +104,8 @@ async def check_message(
         return Verdict(True)
 
     try:
-        provider, model = classifier_choice(app)
+        switch = await asyncio.to_thread(_cloud_switch, app.owner_id)
+        provider, model = classifier_for(app, classifier_choice(app), switch)
         client, source_names = await asyncio.to_thread(_setup, app, provider)
         result = await classify(client, model, app, source_names, history, message)
     except (ProviderError, LLMError, ClassifierError) as exc:

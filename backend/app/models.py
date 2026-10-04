@@ -254,3 +254,18 @@ class ServiceHeartbeat(Base):
     service: Mapped[str] = mapped_column(String(64), primary_key=True)
     detail: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class UserSetting(Base):
+    """Per-user settings stored as JSON, such as the local-to-cloud model switch."""
+
+    __tablename__ = "user_settings"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
