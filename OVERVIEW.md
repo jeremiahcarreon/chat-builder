@@ -72,8 +72,9 @@ There's no Redis: Postgres also runs the job queue (Procrastinate).
 | API              | FastAPI + Uvicorn                       | Fast, typed, built-in streaming                 |
 | Database access  | SQLAlchemy + pgvector                   | Standard Python ORM with vector support         |
 | Migrations       | Alembic                                 | Versioned schema changes                        |
-| LLM layer        | LiteLLM                                 | One interface for Claude, OpenAI, Gemini; streaming and tools |
+| LLM layer        | Official `anthropic` and `openai` SDKs  | Anthropic SDK for Claude; OpenAI SDK for OpenAI, Gemini and local Ollama models (all OpenAI-compatible). Thin in-house adapter gives one interface for streaming and tools |
 | Embeddings       | Ollama + EmbeddingGemma                 | Free, local, runs on CPU                        |
+| Local chat models| Ollama                                  | Optional free, local chat or classifier models  |
 | Job queue        | Procrastinate                           | Background jobs stored in Postgres              |
 | PDF and Word     | Docling                                 | Handles complex PDFs and tables; OCR available  |
 | Excel and CSV    | pandas + openpyxl                       | Load and query spreadsheets                     |
@@ -159,7 +160,7 @@ last year?" aren't wrongly blocked.
 - **Refusal message:** what it says to off-topic questions
 - **Strict mode:** answer only from the attached data, never guess
 - **Classifier:** on/off and strictness
-- **Provider and model:** Claude, OpenAI or Gemini
+- **Provider and model:** Claude, OpenAI, Gemini, or a local model in Ollama
 - **Limits:** maximum answer length, messages per minute, daily tokens
 
 ---

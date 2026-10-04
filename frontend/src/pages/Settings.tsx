@@ -58,11 +58,13 @@ function ProviderKeyRow({ item }: { item: ProviderKey }) {
     <div className="py-4 first:pt-0 last:pb-0">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <StatusDot ok={item.configured ? item.last_test_ok : null} />
+          <StatusDot ok={item.needs_key && item.configured ? item.last_test_ok : null} />
           <div>
             <div className="font-medium">{item.label}</div>
             <div className="text-sm text-slate-500">
-              {!item.configured
+              {!item.needs_key
+                ? "No key needed. Runs on this server's Ollama."
+                : !item.configured
                 ? "Not configured"
                 : item.last_test_ok
                   ? `Working · key ending in ${item.last4}`
@@ -70,7 +72,7 @@ function ProviderKeyRow({ item }: { item: ProviderKey }) {
             </div>
           </div>
         </div>
-        {!editing && (
+        {!editing && !item.needs_key && (
           <div className="flex gap-2">
             {item.configured && (
               <Button variant="secondary" onClick={() => test.mutate()} disabled={test.isPending}>

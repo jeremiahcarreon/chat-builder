@@ -1,1 +1,14 @@
 @import "tailwindcss";
+
+/* Markdown inside chat answers */
+.prose-chat > * + * { margin-top: 0.6em; }
+.prose-chat ul { list-style: disc; padding-left: 1.25rem; }
+.prose-chat ol { list-style: decimal; padding-left: 1.25rem; }
+.prose-chat a { text-decoration: underline; }
+.prose-chat code { background: rgb(226 232 240); padding: 0.1em 0.3em; border-radius: 0.25rem; font-size: 0.9em; }
+.prose-chat pre { background: rgb(15 23 42); color: white; padding: 0.75rem; border-radius: 0.375rem; overflow-x: auto; }
+.prose-chat pre code { background: transparent; padding: 0; }
+.prose-chat table { border-collapse: collapse; font-size: 0.9em; display: block; overflow-x: auto; }
+.prose-chat th, .prose-chat td { border: 1px solid rgb(203 213 225); padding: 0.25rem 0.5rem; text-align: left; }
+.prose-chat th { background: rgb(241 245 249); }
+.prose-chat h1, .prose-chat h2, .prose-chat h3 { font-weight: 600; }

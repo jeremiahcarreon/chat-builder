@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import User
-from app.routers import auth, provider_keys, system
+from app.routers import apps, auth, chat, provider_keys, system
 from app.security import hash_password
 
 log = logging.getLogger(__name__)
@@ -35,6 +35,8 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Chat Builder", lifespan=lifespan)
 app.include_router(auth.router)
+app.include_router(apps.router)
+app.include_router(chat.router)
 app.include_router(provider_keys.router)
 app.include_router(system.router)
 

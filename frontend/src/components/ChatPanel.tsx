@@ -1,0 +1,219 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Loader2, MessageSquarePlus, Send, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { api, streamChat, type AppInfo, type ChatMessage, type ConversationSummary } from "../api";
+
+export function ChatPanel({ appId, className = "" }: { appId: string; className?: string }) {
+  const queryClient = useQueryClient();
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const { data: info } = useQuery({
+    queryKey: ["chat-info", appId],
+    queryFn: () => api<AppInfo>(`/api/chat/${appId}`),
+  });
+  const { data: conversations } = useQuery({
+    queryKey: ["conversations", appId],
+    queryFn: () => api<ConversationSummary[]>(`/api/chat/${appId}/conversations`),
+  });
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, status]);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  async function openConversation(id: string) {
+    if (busy) return;
+    setConversationId(id);
+    setMessages(await api<ChatMessage[]>(`/api/chat/${appId}/conversations/${id}`));
+  }
+
+  function newConversation() {
+    if (busy) return;
+    setConversationId(null);
+    setMessages([]);
+  }
+
+  async function removeConversation(id: string) {
+    if (!confirm("Delete this conversation?")) return;
+    await api(`/api/chat/${appId}/conversations/${id}`, { method: "DELETE" });
+    if (id === conversationId) newConversation();
+    queryClient.invalidateQueries({ queryKey: ["conversations", appId] });
+  }
+
+  function updateLast(update: (msg: ChatMessage) => ChatMessage) {
+    setMessages((prev) => [...prev.slice(0, -1), update(prev[prev.length - 1])]);
+  }
+
+  async function send(event?: FormEvent) {
+    event?.preventDefault();
+    const text = input.trim();
+    if (!text || busy) return;
+    setInput("");
+    setBusy(true);
+    setStatus("Thinking...");
+    setMessages((prev) => [
+      ...prev,
+      { id: `u-${Date.now()}`, role: "user", content: text },
+      { id: `a-${Date.now()}`, role: "assistant", content: "" },
+    ]);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      await streamChat(
+        appId,
+        { message: text, conversation_id: conversationId },
+        (ev) => {
+          switch (ev.type) {
+            case "conversation":
+              setConversationId(ev.id);
+              break;
+            case "text":
+              setStatus(null);
+              updateLast((m) => ({ ...m, content: m.content + ev.text }));
+              break;
+            case "reset":
+              updateLast((m) => ({ ...m, content: "" }));
+              break;
+            case "tool":
+              setStatus(ev.label);
+              break;
+            case "blocked":
+              updateLast((m) => ({ ...m, content: ev.message, blocked: true }));
+              break;
+            case "error":
+              updateLast((m) => ({ ...m, content: m.content || ev.message, error: !m.content }));
+              break;
+          }
+        },
+        controller.signal,
+      );
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        updateLast((m) => ({ ...m, content: err instanceof Error ? err.message : "Request failed", error: true }));
+      }
+    } finally {
+      setBusy(false);
+      setStatus(null);
+      queryClient.invalidateQueries({ queryKey: ["conversations", appId] });
+    }
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      send();
+    }
+  }
+
+  return (
+    <div className={`flex min-h-0 overflow-hidden rounded-lg border border-slate-200 bg-white ${className}`}>
+      <aside className="hidden w-56 shrink-0 flex-col border-r border-slate-200 bg-slate-50 md:flex">
+        <button
+          onClick={newConversation}
+          className="m-3 flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-100"
+        >
+          <MessageSquarePlus size={16} /> New chat
+        </button>
+        <ul className="flex-1 space-y-0.5 overflow-y-auto px-2 pb-2">
+          {conversations?.map((c) => (
+            <li key={c.id} className="group flex items-center">
+              <button
+                onClick={() => openConversation(c.id)}
+                className={`flex-1 truncate rounded-md px-2 py-1.5 text-left text-sm ${
+                  c.id === conversationId ? "bg-slate-200 font-medium" : "hover:bg-slate-100"
+                }`}
+                title={c.title}
+              >
+                {c.title || "Untitled"}
+              </button>
+              <button
+                onClick={() => removeConversation(c.id)}
+                className="invisible p-1 text-slate-400 hover:text-red-600 group-hover:visible"
+                aria-label="Delete conversation"
+              >
+                <Trash2 size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex-1 space-y-4 overflow-y-auto p-5">
+          {messages.length === 0 && (
+            <div className="mx-auto mt-10 max-w-md text-center">
+              <h2 className="text-lg font-semibold">{info?.name}</h2>
+              <p className="mt-2 text-sm text-slate-500">
+                {info?.welcome_message || info?.description || "Ask a question to get started."}
+              </p>
+            </div>
+          )}
+          {messages.map((m) => (
+            <MessageBubble key={m.id} message={m} />
+          ))}
+          {status && (
+            <div className="flex items-center gap-2 text-sm text-slate-500">
+              <Loader2 size={14} className="animate-spin" /> {status}
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
+        <form onSubmit={send} className="border-t border-slate-200 p-3">
+          <div className="flex items-end gap-2">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              rows={1}
+              maxLength={8000}
+              placeholder="Type a message..."
+              className="max-h-40 min-h-10 flex-1 resize-none rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+            />
+            <button
+              type="submit"
+              disabled={busy || !input.trim()}
+              className="flex h-10 w-10 items-center justify-center rounded-md bg-slate-900 text-white disabled:opacity-40"
+              aria-label="Send"
+            >
+              {busy ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function MessageBubble({ message }: { message: ChatMessage }) {
+  if (message.role === "user") {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-slate-900 px-4 py-2 text-sm text-white">
+          {message.content}
+        </div>
+      </div>
+    );
+  }
+  const tone = message.error
+    ? "border-red-200 bg-red-50 text-red-800"
+    : message.blocked
+      ? "border-amber-200 bg-amber-50 text-amber-900"
+      : "border-slate-200 bg-slate-50";
+  if (!message.content) return null;
+  return (
+    <div className="flex">
+      <div className={`prose-chat max-w-[85%] rounded-2xl rounded-bl-sm border px-4 py-2 text-sm ${tone}`}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+      </div>
+    </div>
+  );
+}

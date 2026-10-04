@@ -1,3 +1,4 @@
+import type React from "react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 
 type Variant = "primary" | "secondary" | "danger";
@@ -45,4 +46,87 @@ export function Card({ title, description, children }: { title: string; descript
 export function StatusDot({ ok }: { ok: boolean | null }) {
   const color = ok === null ? "bg-slate-300" : ok ? "bg-emerald-500" : "bg-red-500";
   return <span className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${color}`} />;
+}
+
+export function Textarea({ className = "", ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      className={`w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200 ${className}`}
+      {...props}
+    />
+  );
+}
+
+export function Select({ className = "", ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      className={`w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200 ${className}`}
+      {...props}
+    />
+  );
+}
+
+export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <label className="block space-y-1 text-sm">
+      <span className="font-medium">{label}</span>
+      {children}
+      {hint && <span className="block text-xs text-slate-500">{hint}</span>}
+    </label>
+  );
+}
+
+export function Toggle({
+  checked,
+  onChange,
+  label,
+  hint,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  label: string;
+  hint?: string;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-3 text-sm">
+      <input
+        type="checkbox"
+        className="mt-0.5 h-4 w-4 accent-slate-900"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span>
+        <span className="font-medium">{label}</span>
+        {hint && <span className="block text-xs text-slate-500">{hint}</span>}
+      </span>
+    </label>
+  );
+}
+
+export function Tabs<T extends string>({
+  tabs,
+  active,
+  onChange,
+}: {
+  tabs: { id: T; label: string }[];
+  active: T;
+  onChange: (id: T) => void;
+}) {
+  return (
+    <div className="flex gap-1 border-b border-slate-200">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          onClick={() => onChange(tab.id)}
+          className={`-mb-px border-b-2 px-4 py-2 text-sm ${
+            active === tab.id
+              ? "border-slate-900 font-medium text-slate-900"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
 }
