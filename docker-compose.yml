@@ -9,6 +9,9 @@ x-app: &app
     OLLAMA_URL: http://ollama:11434
   volumes:
     - uploads:/data/uploads
+  # Lets connections to "host.docker.internal" reach databases on this machine.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
   restart: unless-stopped
 
 services:

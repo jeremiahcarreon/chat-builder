@@ -85,8 +85,10 @@ async def ingest_source(source_id: uuid.UUID) -> None:
 
             stats = await ingest_spreadsheet(source)
         else:
-            from app.connectors.databases import index_database
+            from app.connectors.databases import DATABASE_KINDS, index_database
 
+            if source.kind not in DATABASE_KINDS:
+                raise IngestError(f"Unknown data source type: {source.kind}")
             stats = await index_database(source)
     except (ParseError, EmbeddingError, IngestError) as exc:
         log.warning("Processing %s failed: %s", source_id, exc)

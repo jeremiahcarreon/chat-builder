@@ -83,15 +83,29 @@ def _execute(source_id: uuid.UUID, kind: str, sql: str) -> str:
     return run_database_query(source_id, sql, MAX_ROWS)
 
 
+def _unwrap(args):
+    """Some smaller models nest the arguments one level deep; accept that."""
+    if isinstance(args, dict) and "sql" not in args:
+        for value in args.values():
+            if isinstance(value, dict) and "sql" in value:
+                return value
+    return args
+
+
 async def run_sql_tool(ctx, call: ToolCall) -> ToolResult:
-    args = call.arguments
+    args = _unwrap(call.arguments)
     if not (
         isinstance(args, dict)
         and isinstance(args.get("source_id"), str)
         and isinstance(args.get("sql"), str)
         and args["sql"].strip()
     ):
-        return ToolResult(call, "Invalid arguments: provide source_id and sql as strings.", is_error=True)
+        return ToolResult(
+            call,
+            'Invalid arguments. Call sql_query with exactly two string fields, for example: '
+            '{"source_id": "<source_id from available_tables>", "sql": "SELECT ..."}',
+            is_error=True,
+        )
     source = ctx.queryable.get(args["source_id"].strip())
     if source is None:
         return ToolResult(call, "Unknown source_id. Use a source_id from <available_tables>.", is_error=True)

@@ -39,7 +39,7 @@ class SourceOut(BaseModel):
 # Config keys that are safe and useful to show in the dashboard.
 PUBLIC_CONFIG = {
     "filename", "size", "chunk_count", "page_count", "table_count", "row_count",
-    "host", "port", "database", "username", "encrypt", "trust_server_certificate", "schemas",
+    "host", "port", "database", "username", "encryption", "require_tls", "schemas",
 }
 
 
@@ -176,11 +176,129 @@ async def reprocess_source(source_id: uuid.UUID, db: DbSession, user: CurrentUse
 
 @router.delete("/sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_source(source_id: uuid.UUID, db: DbSession, user: CurrentUser) -> None:
-    source = owned_source(db, user, source_id)
-    clear_index(source.id)
     from app.connectors.spreadsheets import drop_sheet_tables
 
+    source = owned_source(db, user, source_id)
+    clear_index(source.id)
     drop_sheet_tables(source)
     db.delete(source)
     db.commit()
     shutil.rmtree(source_dir(source_id), ignore_errors=True)
+
+
+class DatabaseIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    kind: str
+    host: str = Field(min_length=1, max_length=255)
+    port: int | None = Field(default=None, ge=1, le=65535)
+    database: str = Field(default="", max_length=255)
+    username: str = Field(default="", max_length=255)
+    # Leave empty when editing to keep the saved password.
+    password: str = Field(default="", max_length=1000)
+    encryption: str = "request"
+    require_tls: bool = False
+    schemas: list[str] = Field(default_factory=list, max_length=50)
+
+    def connection_settings(self, password: str | None = None):
+        from app.connectors.databases import ConnectionSettings, SERVER_KINDS
+
+        if self.kind not in SERVER_KINDS:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unsupported database type: {self.kind}")
+        if self.encryption not in ("off", "request", "require"):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "encryption must be off, request or require")
+        return ConnectionSettings(
+            kind=self.kind,
+            host=self.host.strip(),
+            port=self.port,
+            database=self.database.strip(),
+            username=self.username.strip(),
+            password=self.password if password is None else password,
+            encryption=self.encryption,
+            require_tls=self.require_tls,
+            schemas=[s.strip() for s in self.schemas if s.strip()],
+        )
+
+    def public_config(self) -> dict:
+        cs = self.connection_settings()
+        return {
+            "host": cs.host,
+            "port": cs.port,
+            "database": cs.database,
+            "username": cs.username,
+            "encryption": cs.encryption,
+            "require_tls": cs.require_tls,
+            "schemas": cs.schemas,
+        }
+
+
+class TestResult(BaseModel):
+    ok: bool
+    message: str
+
+
+async def _test(cs) -> TestResult:
+    import asyncio
+
+    from app.connectors.databases import ConnectionFailed, test_connection
+
+    try:
+        count = await asyncio.to_thread(test_connection, cs)
+    except ConnectionFailed as exc:
+        return TestResult(ok=False, message=str(exc))
+    return TestResult(ok=True, message=f"Connected. Found {count} table{'s' if count != 1 else ''}.")
+
+
+@router.post("/apps/{app_id}/sources/database/test")
+async def test_database(app_id: uuid.UUID, body: DatabaseIn, db: DbSession, user: CurrentUser) -> TestResult:
+    owned_app(db, user, app_id)
+    return await _test(body.connection_settings())
+
+
+@router.post("/sources/{source_id}/database/test")
+async def test_saved_database(
+    source_id: uuid.UUID, body: DatabaseIn, db: DbSession, user: CurrentUser
+) -> TestResult:
+    """Tests edited settings, using the saved password if none was entered."""
+    from app.connectors.databases import settings_for
+
+    source = owned_source(db, user, source_id)
+    password = body.password or settings_for(source).password
+    return await _test(body.connection_settings(password))
+
+
+@router.post("/apps/{app_id}/sources/database", status_code=status.HTTP_201_CREATED)
+async def add_database(app_id: uuid.UUID, body: DatabaseIn, db: DbSession, user: CurrentUser) -> SourceOut:
+    from app.connectors.databases import secret_context
+    from app.crypto import encrypt
+
+    owned_app(db, user, app_id)
+    source = DataSource(
+        id=uuid.uuid4(), app_id=app_id, kind=body.kind, name=body.name.strip(), status="pending",
+        config=body.public_config(),
+    )
+    source.encrypted_secret = encrypt(body.password, secret_context(source.id)) if body.password else None
+    db.add(source)
+    db.commit()
+    await queue_ingest(source.id)
+    return source_out(source)
+
+
+@router.put("/sources/{source_id}/database")
+async def update_database(
+    source_id: uuid.UUID, body: DatabaseIn, db: DbSession, user: CurrentUser
+) -> SourceOut:
+    from app.connectors.databases import SERVER_KINDS, secret_context
+    from app.crypto import encrypt
+
+    source = owned_source(db, user, source_id)
+    if source.kind not in SERVER_KINDS or body.kind != source.kind:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The database type can't be changed")
+    source.name = body.name.strip()
+    source.config = {**source.config, **body.public_config()}
+    if body.password:
+        source.encrypted_secret = encrypt(body.password, secret_context(source.id))
+    source.status = "pending"
+    source.error = None
+    db.commit()
+    await queue_ingest(source.id)
+    return source_out(source)

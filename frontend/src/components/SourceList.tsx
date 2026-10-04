@@ -1,7 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Database, FileSpreadsheet, FileText, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { Database, FileSpreadsheet, FileText, Loader2, Pencil, RefreshCw, Trash2 } from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router";
 import { api, type DataSource } from "../api";
+import { DatabaseForm, SERVER_KINDS } from "./DatabaseForm";
 
 const KIND_LABELS: Record<string, string> = {
   file: "Document",
@@ -48,6 +50,7 @@ function summary(source: DataSource): string {
 
 export function SourceList({ sources, showApp = false }: { sources: DataSource[]; showApp?: boolean }) {
   const queryClient = useQueryClient();
+  const [editing, setEditing] = useState<string | null>(null);
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ["sources"] });
     queryClient.invalidateQueries({ queryKey: ["apps"] });
@@ -88,8 +91,20 @@ export function SourceList({ sources, showApp = false }: { sources: DataSource[]
               {summary(source)}
             </div>
             {source.error && <div className="mt-1 text-xs text-red-600">{source.error}</div>}
+            {editing === source.id && (
+              <DatabaseForm appId={source.app_id} existing={source} onDone={() => setEditing(null)} />
+            )}
           </div>
           <div className="flex gap-1">
+            {SERVER_KINDS.has(source.kind) && (
+              <button
+                onClick={() => setEditing(editing === source.id ? null : source.id)}
+                className="rounded p-1.5 text-slate-500 hover:bg-slate-100"
+                title="Edit connection"
+              >
+                <Pencil size={15} />
+              </button>
+            )}
             <button
               onClick={() => reprocess.mutate(source.id)}
               className="rounded p-1.5 text-slate-500 hover:bg-slate-100"

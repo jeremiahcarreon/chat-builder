@@ -76,9 +76,9 @@ There's no Redis: Postgres also runs the job queue (Procrastinate).
 | Embeddings       | Ollama + EmbeddingGemma                 | Free, local, runs on CPU                        |
 | Local chat models| Ollama                                  | Optional free, local chat or classifier models  |
 | Job queue        | Procrastinate                           | Background jobs stored in Postgres              |
-| PDF and Word     | Docling                                 | Handles complex PDFs and tables; OCR available  |
+| PDF and Word     | pypdf + python-docx                     | Lightweight text and table extraction. Scanned PDFs (OCR) are not supported yet; Docling can be added later |
 | Excel and CSV    | pandas + openpyxl                       | Load and query spreadsheets                     |
-| SQL Server       | pyodbc + Microsoft ODBC driver          | Most reliable SQL Server connection             |
+| SQL Server       | pymssql (bundles FreeTDS)               | No system drivers to install in the container; supports encrypted connections |
 | MySQL / MariaDB  | PyMySQL                                 | One driver covers both                          |
 | Postgres         | psycopg                                 | Standard driver                                 |
 | SQLite           | sqlite3 (built in)                      | File-based databases                            |

@@ -239,14 +239,19 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
     try:
         while (event := await queue.get()) is not None:
             yield event
-    finally:
-        if not task.done():
-            # The browser disconnected; stop generating.
-            task.cancel()
-            meta["error"] = meta.get("error") or "cancelled"
+    except BaseException:
+        # The browser disconnected: stop generating and keep what was produced.
+        task.cancel()
+        meta["error"] = meta.get("error") or "cancelled"
         answer = "".join(answer_parts).strip()
-        failed = bool(meta.get("error")) and not answer
-        message_id = await asyncio.to_thread(
-            _finish, prep, answer or "(no answer)", meta, failed
-        )
+        await asyncio.to_thread(_finish, prep, answer or "(no answer)", meta, not answer)
+        raise
+
+    answer = "".join(answer_parts).strip()
+    if not answer and not meta.get("error"):
+        # The model returned nothing at all.
+        answer = "Sorry, I couldn't come up with an answer. Please try rephrasing the question."
+        meta["error"] = "empty"
+        yield {"type": "error", "message": answer}
+    message_id = await asyncio.to_thread(_finish, prep, answer or "(no answer)", meta, not answer or meta.get("error") == "empty")
     yield {"type": "done", "message_id": message_id}
