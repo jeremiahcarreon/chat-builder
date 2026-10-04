@@ -29,12 +29,36 @@ class AppIn(BaseModel):
     messages_per_minute: int = Field(default=10, ge=1, le=600)
     daily_token_limit: int = Field(default=500_000, ge=1_000, le=1_000_000_000)
     is_public: bool = False
+    classifier_enabled: bool = True
+    classifier_provider: str | None = None
+    classifier_model: str | None = Field(default=None, max_length=200)
+    classifier_strictness: str = "balanced"
+    classifier_fail_open: bool = True
 
     @field_validator("provider")
     @classmethod
     def _known_provider(cls, value: str) -> str:
         if value not in PROVIDERS:
             raise ValueError(f"Unknown provider: {value}")
+        return value
+
+    @field_validator("classifier_provider", "classifier_model")
+    @classmethod
+    def _blank_is_none(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
+
+    @field_validator("classifier_provider")
+    @classmethod
+    def _known_classifier_provider(cls, value: str | None) -> str | None:
+        if value is not None and value not in PROVIDERS:
+            raise ValueError(f"Unknown provider: {value}")
+        return value
+
+    @field_validator("classifier_strictness")
+    @classmethod
+    def _strictness(cls, value: str) -> str:
+        if value not in ("lenient", "balanced", "strict"):
+            raise ValueError("Must be lenient, balanced or strict")
         return value
 
     @field_validator("name", "model")

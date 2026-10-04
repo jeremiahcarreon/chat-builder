@@ -99,8 +99,19 @@ class ChatApp(Base):
     out_of_scope: Mapped[str] = mapped_column(Text, default="", nullable=False)
     refusal_message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     strict_mode: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    # Guardrail settings for the System 1 classifier (step 6).
+    # System 1 classifier: screens each message before the main model sees it.
     classifier_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Empty means "use the app's own provider with its suggested classifier model".
+    classifier_provider: Mapped[str | None] = mapped_column(String(32))
+    classifier_model: Mapped[str | None] = mapped_column(String(200))
+    # lenient | balanced | strict
+    classifier_strictness: Mapped[str] = mapped_column(
+        String(16), default="balanced", server_default="balanced", nullable=False
+    )
+    # If the classifier fails (provider down, bad output): let the message through, or block it.
+    classifier_fail_open: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
     max_answer_tokens: Mapped[int] = mapped_column(Integer, default=1024, nullable=False)
     messages_per_minute: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     daily_token_limit: Mapped[int] = mapped_column(Integer, default=200_000, nullable=False)

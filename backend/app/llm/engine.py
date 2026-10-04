@@ -163,8 +163,12 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
         return
 
     # Guardrails run before anything is sent to the main model.
-    verdict = await check_message(app, prep.history, req.message)
+    verdict = await check_message(app, prep.history, req.message, req.user_id, req.visitor_id)
     prep.usage.extend(verdict.usage)
+    if verdict.meta.get("verdict") == "allowed":
+        screened = {"screened": verdict.meta}
+    else:
+        screened = {}
     if not verdict.allowed:
         message_id = await asyncio.to_thread(
             _finish, prep, verdict.reply, {"blocked": verdict.meta}, True
@@ -185,7 +189,7 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
 
     queue: asyncio.Queue[dict | None] = asyncio.Queue()
     answer_parts: list[str] = []
-    meta: dict = {"sources": ctx.source_names, "tool_calls": []}
+    meta: dict = {"sources": ctx.source_names, "tool_calls": [], **screened}
 
     async def on_text(text: str) -> None:
         answer_parts.append(text)

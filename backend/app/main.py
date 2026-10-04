@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.db import SessionLocal
 from app.models import User
 from app.queue import queue
-from app.routers import apps, auth, chat, provider_keys, sources, system
+from app.routers import apps, auth, chat, provider_keys, sources, system, usage
 from app.security import hash_password
 
 log = logging.getLogger(__name__)
@@ -43,6 +43,7 @@ app.include_router(chat.router)
 app.include_router(provider_keys.router)
 app.include_router(sources.router)
 app.include_router(system.router)
+app.include_router(usage.router)
 
 # Serve the built React app, with client-side routes falling back to index.html.
 _static = Path(get_settings().static_dir)
