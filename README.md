@@ -1,7 +1,32 @@
 # Chat Builder
 
-Self-hosted dashboard for building scoped, RAG-enabled chat apps.
+Self-hosted dashboard for building scoped chat assistants on your own data.
 See [OVERVIEW.md](OVERVIEW.md) for the design.
+
+- **Your data:** upload PDFs (including scans), Word, text and Excel files, or
+  connect SQL Server, MySQL, MariaDB, Postgres or SQLite. Documents are
+  searched automatically; spreadsheets and databases are queried read-only.
+- **Any model:** Claude, OpenAI, Gemini, or free local models through Ollama,
+  chosen per app, with one switch to move local apps to the cloud.
+- **Scoped and protected:** each app has a personality, topics it covers and
+  refuses, a classifier that screens every question first, and rate and
+  daily usage limits.
+- **Measured:** thumbs up/down feedback, versioned prompts, and test sets
+  that catch regressions when you change a prompt or model.
+- **Low maintenance:** one-line install; updates itself within a day of each
+  release.
+
+## First steps
+
+1. **Settings:** add an API key for Claude, OpenAI or Gemini, or use a local
+   Ollama model (no key). Check that System status is all green.
+2. **Chat Apps → New app:** name, description, model, personality, what's in
+   and out of scope, and the refusal message.
+3. **Data sources:** upload files or connect a database.
+4. **Try it:** ask in-scope, off-topic and data questions.
+5. **Quality:** add a few test questions and run them; run them again after
+   any change to the prompt or model.
+6. Turn on **Public chat page** to share the app's link.
 
 ## Install
 
