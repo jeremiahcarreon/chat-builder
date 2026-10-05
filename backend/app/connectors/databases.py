@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from sqlglot import exp
 
 from app.connectors.results import format_results
+from app.connectors.schema import describe, incoming_references, read_metadata
 from app.connectors.sql_safety import DIALECTS, check_select
 from app.crypto import decrypt
 from app.db import SessionLocal
@@ -32,7 +33,7 @@ KIND_LABELS = {
 }
 CONNECT_TIMEOUT = 10
 QUERY_TIMEOUT = 30
-MAX_TABLES = 500
+MAX_TABLES = 2000
 SYSTEM_SCHEMAS = {
     "information_schema", "pg_catalog", "pg_toast", "sys", "mysql", "performance_schema",
 }
@@ -56,6 +57,11 @@ class ConnectionSettings:
     # Optional list of schemas to include (empty means all).
     schemas: list[str] = field(default_factory=list)
     path: str = ""  # SQLite file
+    # Longest a single query may run, in seconds.
+    query_timeout: int = QUERY_TIMEOUT
+    # SQL Server: read without waiting on (or blocking) other users' changes
+    # (READ UNCOMMITTED). Postgres and MySQL readers never block writers.
+    dirty_reads: bool = False
 
 
 @dataclass
@@ -88,6 +94,8 @@ def settings_for(source: DataSource) -> ConnectionSettings:
         require_tls=cfg.get("require_tls", False),
         schemas=cfg.get("schemas", []),
         path=cfg.get("path", ""),
+        query_timeout=int(cfg.get("query_timeout") or QUERY_TIMEOUT),
+        dirty_reads=bool(cfg.get("dirty_reads", False)),
     )
 
 
@@ -98,16 +106,21 @@ def connect(cs: ConnectionSettings):
         if cs.kind == "mssql":
             import pymssql
 
-            return pymssql.connect(
+            conn = pymssql.connect(
                 server=cs.host,
                 port=str(port),
                 user=cs.username,
                 password=cs.password,
                 database=cs.database,
                 login_timeout=CONNECT_TIMEOUT,
-                timeout=QUERY_TIMEOUT,
+                timeout=cs.query_timeout,
                 encryption=cs.encryption,
             )
+            if cs.dirty_reads:
+                cursor = conn.cursor()
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
+                cursor.close()
+            return conn
         if cs.kind in ("mysql", "mariadb"):
             import pymysql
 
@@ -118,15 +131,15 @@ def connect(cs: ConnectionSettings):
                 password=cs.password,
                 database=cs.database or None,
                 connect_timeout=CONNECT_TIMEOUT,
-                read_timeout=QUERY_TIMEOUT,
+                read_timeout=cs.query_timeout,
                 ssl={} if cs.require_tls else None,
                 charset="utf8mb4",
             )
             with conn.cursor() as cur:
                 cur.execute("SET SESSION TRANSACTION READ ONLY")
                 for statement in (
-                    f"SET SESSION max_execution_time = {QUERY_TIMEOUT * 1000}",  # MySQL
-                    f"SET SESSION max_statement_time = {QUERY_TIMEOUT}",  # MariaDB
+                    f"SET SESSION max_execution_time = {cs.query_timeout * 1000}",  # MySQL
+                    f"SET SESSION max_statement_time = {cs.query_timeout}",  # MariaDB
                 ):
                     try:
                         cur.execute(statement)
@@ -136,7 +149,7 @@ def connect(cs: ConnectionSettings):
         if cs.kind == "postgres":
             import psycopg
 
-            options = f"-c default_transaction_read_only=on -c statement_timeout={QUERY_TIMEOUT * 1000}"
+            options = f"-c default_transaction_read_only=on -c statement_timeout={cs.query_timeout * 1000}"
             if cs.schemas:
                 # Lets unqualified table names resolve within the included schemas.
                 path = ",".join('"' + s.replace('"', '""').replace(" ", "\\ ") + '"' for s in cs.schemas)
@@ -153,7 +166,7 @@ def connect(cs: ConnectionSettings):
             )
         if cs.kind == "sqlite":
             conn = sqlite3.connect(f"file:{cs.path}?mode=ro", uri=True, timeout=CONNECT_TIMEOUT)
-            deadline = time.monotonic() + QUERY_TIMEOUT
+            deadline = time.monotonic() + cs.query_timeout
             # Abort long-running queries.
             conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 10_000)
             return conn
@@ -239,26 +252,19 @@ def test_connection(cs: ConnectionSettings) -> int:
         conn.close()
 
 
-def _describe(source: DataSource, table: TableInfo) -> str:
-    columns = "\n".join(f"- {name} ({data_type})" for name, data_type in table.columns)
-    return (
-        f"Table {table.qualified(source.kind)} in {KIND_LABELS[source.kind]} database "
-        f'"{source.name}". Columns:\n{columns}'
-    )
-
-
 async def index_database(source: DataSource) -> dict:
     cs = settings_for(source)
 
-    def read_schema() -> list[TableInfo]:
+    def read_schema() -> tuple[list[TableInfo], dict]:
         conn = connect(cs)
         try:
-            return list_tables(conn, cs)
+            tables = list_tables(conn, cs)
+            return tables, read_metadata(conn, source.kind, tables)
         finally:
             conn.close()
 
     try:
-        tables = await asyncio.to_thread(read_schema)
+        tables, meta = await asyncio.to_thread(read_schema)
     except ConnectionFailed as exc:
         raise IngestError(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -266,27 +272,74 @@ async def index_database(source: DataSource) -> dict:
     if not tables:
         raise IngestError("Connected, but no tables were found that this login can see.")
 
-    descriptions = [_describe(source, t) for t in tables]
-    vectors = await embed_documents(descriptions, title=source.name)
+    cache = [
+        {
+            "name": t.qualified(source.kind),
+            "columns": [[n, d] for n, d in t.columns],
+            "primary_key": meta[t.qualified(source.kind)].primary_key,
+            "foreign_keys": [list(fk) for fk in meta[t.qualified(source.kind)].foreign_keys],
+            "rows": meta[t.qualified(source.kind)].rows,
+        }
+        for t in tables
+    ]
+
+    def store_cache() -> None:
+        with SessionLocal() as db:
+            stored = db.get(DataSource, source.id)
+            stored.config = {**stored.config, "schema_cache": cache}
+            db.commit()
+
+    await asyncio.to_thread(store_cache)
+    visible = await rebuild_schema_docs(source.id)
+    return {"table_count": visible, "hidden_count": len(cache) - visible}
+
+
+async def rebuild_schema_docs(source_id: uuid.UUID, only: set[str] | None = None) -> int:
+    """Re-describes and re-embeds tables from the saved catalog and notes (no database connection).
+
+    With `only`, just those tables are refreshed. Returns the number of visible tables.
+    """
+    def load():
+        with SessionLocal() as db:
+            source = db.get(DataSource, source_id)
+            db.expunge(source)
+            return source
+
+    source = await asyncio.to_thread(load)
+    cache = source.config.get("schema_cache", [])
+    notes = source.config.get("table_notes", {})
+    incoming = incoming_references(cache)
+    visible = [e for e in cache if not notes.get(e["name"], {}).get("hidden")]
+    targets = [e for e in visible if only is None or e["name"] in only]
+    descriptions = [
+        describe(source.name, KIND_LABELS[source.kind], e, notes.get(e["name"], {}), incoming.get(e["name"], []))
+        for e in targets
+    ]
+    vectors = await embed_documents(descriptions, title=source.name) if descriptions else []
 
     def save() -> None:
         with SessionLocal() as db:
-            db.query(SchemaDoc).filter(SchemaDoc.source_id == source.id).delete()
-            for table, description, vector in zip(tables, descriptions, vectors, strict=True):
+            query = db.query(SchemaDoc).filter(SchemaDoc.source_id == source.id)
+            if only is not None:
+                query = query.filter(SchemaDoc.table_name.in_(only))
+            query.delete(synchronize_session=False)
+            for entry, description, vector in zip(targets, descriptions, vectors, strict=True):
                 db.add(
                     SchemaDoc(
                         app_id=source.app_id,
                         source_id=source.id,
-                        table_name=table.qualified(source.kind),
+                        table_name=entry["name"],
                         description=description,
-                        columns=[{"name": n, "type": t} for n, t in table.columns],
+                        columns=[{"name": n, "type": t} for n, t in entry["columns"]],
                         embedding=vector,
                     )
                 )
+            stored = db.get(DataSource, source.id)
+            stored.config = {**stored.config, "table_count": len(visible), "hidden_count": len(cache) - len(visible)}
             db.commit()
 
     await asyncio.to_thread(save)
-    return {"table_count": len(tables)}
+    return len(visible)
 
 
 def _check_tables(tree: exp.Expression, source: DataSource, allowed: set[str]) -> None:

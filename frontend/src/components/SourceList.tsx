@@ -1,9 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Database, FileSpreadsheet, FileText, Loader2, Pencil, RefreshCw, Trash2 } from "lucide-react";
+import { Database, FileSpreadsheet, FileText, Loader2, Pencil, RefreshCw, Table2, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { api, type DataSource } from "../api";
 import { DatabaseForm, SERVER_KINDS } from "./DatabaseForm";
+import { TablesPanel } from "./TablesPanel";
 
 const KIND_LABELS: Record<string, string> = {
   file: "Document",
@@ -50,6 +51,7 @@ function summary(source: DataSource): string {
   if (d.page_count) parts.push(`${d.page_count} page${d.page_count === 1 ? "" : "s"}`);
   if (d.chunk_count) parts.push(`${d.chunk_count} passage${d.chunk_count === 1 ? "" : "s"}`);
   if (d.table_count) parts.push(`${d.table_count} table${d.table_count === 1 ? "" : "s"}`);
+  if (d.hidden_count) parts.push(`${d.hidden_count} hidden`);
   if (d.row_count) parts.push(`${Number(d.row_count).toLocaleString()} row${d.row_count === 1 ? "" : "s"}`);
   return parts.join(" · ");
 }
@@ -57,6 +59,7 @@ function summary(source: DataSource): string {
 export function SourceList({ sources, showApp = false }: { sources: DataSource[]; showApp?: boolean }) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<string | null>(null);
+  const [tables, setTables] = useState<string | null>(null);
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ["sources"] });
     queryClient.invalidateQueries({ queryKey: ["apps"] });
@@ -100,8 +103,18 @@ export function SourceList({ sources, showApp = false }: { sources: DataSource[]
             {editing === source.id && (
               <DatabaseForm appId={source.app_id} existing={source} onDone={() => setEditing(null)} />
             )}
+            {tables === source.id && <TablesPanel sourceId={source.id} />}
           </div>
           <div className="flex gap-1">
+            {(SERVER_KINDS.has(source.kind) || source.kind === "sqlite") && source.status === "ready" && (
+              <button
+                onClick={() => setTables(tables === source.id ? null : source.id)}
+                className="rounded p-1.5 text-slate-500 hover:bg-slate-100"
+                title="Tables: notes and hiding"
+              >
+                <Table2 size={15} />
+              </button>
+            )}
             {SERVER_KINDS.has(source.kind) && (
               <button
                 onClick={() => setEditing(editing === source.id ? null : source.id)}

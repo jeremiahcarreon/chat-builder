@@ -79,13 +79,18 @@ def tools_for(ctx: TurnContext) -> list[ToolSpec]:
     # Offered only when this turn has relevant tables to query.
     if not ctx.queryable or not ctx.table_descriptions:
         return []
+    from app.connectors.explore import EXPLORE_TOOLS
     from app.connectors.query import SQL_TOOL
 
-    return [SQL_TOOL]
+    # Exploration only helps for connected databases, which can have hundreds of tables.
+    databases = any(kind not in ("spreadsheet",) for kind, _ in ctx.queryable.values())
+    return [SQL_TOOL, *EXPLORE_TOOLS] if databases else [SQL_TOOL]
 
 
 def describe_call(ctx: TurnContext, call: ToolCall) -> str:
     source = ctx.queryable.get(str((call.arguments or {}).get("source_id")))
+    if call.name in ("find_tables", "describe_table"):
+        return f"Looking through {source[1]}'s tables" if source else "Looking through tables"
     return f"Querying {source[1]}" if source else "Querying data"
 
 
@@ -94,4 +99,8 @@ async def run_tool(ctx: TurnContext, call: ToolCall) -> ToolResult:
         from app.connectors.query import run_sql_tool
 
         return await run_sql_tool(ctx, call)
+    if call.name in ("find_tables", "describe_table"):
+        from app.connectors.explore import run_explore_tool
+
+        return await run_explore_tool(ctx, call)
     return ToolResult(call, f"Unknown tool: {call.name}", is_error=True)

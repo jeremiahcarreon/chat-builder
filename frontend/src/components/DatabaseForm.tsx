@@ -23,6 +23,8 @@ interface FormState {
   encryption: string;
   require_tls: boolean;
   schemas: string;
+  query_timeout: string;
+  dirty_reads: boolean;
 }
 
 function initialState(existing?: DataSource): FormState {
@@ -38,6 +40,8 @@ function initialState(existing?: DataSource): FormState {
     encryption: String(d.encryption ?? "request"),
     require_tls: Boolean(d.require_tls),
     schemas: Array.isArray(d.schemas) ? (d.schemas as string[]).join(", ") : "",
+    query_timeout: d.query_timeout ? String(d.query_timeout) : "30",
+    dirty_reads: Boolean(d.dirty_reads),
   };
 }
 
@@ -81,6 +85,8 @@ export function DatabaseForm({
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean),
+      query_timeout: Number(form.query_timeout) || 30,
+      dirty_reads: form.kind === "mssql" && form.dirty_reads,
     });
 
   const test = useMutation({
@@ -171,6 +177,19 @@ export function DatabaseForm({
           <Field label="Schemas to include (optional)" hint="Comma-separated, e.g. dbo, sales. Leave blank for all.">
             <Input value={form.schemas} onChange={(e) => set("schemas", e.target.value)} />
           </Field>
+        )}
+        <Field label="Query time limit (seconds)" hint="Longest a single query may run. Raise it for reports over large tables.">
+          <Input type="number" min={5} max={600} value={form.query_timeout} onChange={(e) => set("query_timeout", e.target.value)} />
+        </Field>
+        {form.kind === "mssql" && (
+          <div className="flex items-end pb-2">
+            <Toggle
+              checked={form.dirty_reads}
+              onChange={(v) => set("dirty_reads", v)}
+              label="Don't wait on other users' changes"
+              hint="Reads without locking (READ UNCOMMITTED), so reports never slow down people working in the database. Results can include changes that aren't saved yet."
+            />
+          </div>
         )}
       </div>
 

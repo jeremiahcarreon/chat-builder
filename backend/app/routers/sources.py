@@ -40,6 +40,7 @@ class SourceOut(BaseModel):
 PUBLIC_CONFIG = {
     "filename", "size", "chunk_count", "page_count", "table_count", "row_count",
     "host", "port", "database", "username", "encryption", "require_tls", "schemas",
+    "query_timeout", "dirty_reads", "hidden_count",
 }
 
 
@@ -198,6 +199,9 @@ class DatabaseIn(BaseModel):
     encryption: str = "request"
     require_tls: bool = False
     schemas: list[str] = Field(default_factory=list, max_length=50)
+    # Longest a single query may run (reports on large tables may need more).
+    query_timeout: int = Field(default=30, ge=5, le=600)
+    dirty_reads: bool = False
 
     def connection_settings(self, password: str | None = None):
         from app.connectors.databases import ConnectionSettings, SERVER_KINDS
@@ -216,6 +220,8 @@ class DatabaseIn(BaseModel):
             encryption=self.encryption,
             require_tls=self.require_tls,
             schemas=[s.strip() for s in self.schemas if s.strip()],
+            query_timeout=self.query_timeout,
+            dirty_reads=self.dirty_reads and self.kind == "mssql",
         )
 
     def public_config(self) -> dict:
@@ -228,6 +234,8 @@ class DatabaseIn(BaseModel):
             "encryption": cs.encryption,
             "require_tls": cs.require_tls,
             "schemas": cs.schemas,
+            "query_timeout": cs.query_timeout,
+            "dirty_reads": cs.dirty_reads,
         }
 
 
@@ -302,3 +310,83 @@ async def update_database(
     db.commit()
     await queue_ingest(source.id)
     return source_out(source)
+
+
+# ------------------------------------------------------------ table notes
+
+
+class TableInfoOut(BaseModel):
+    name: str
+    columns: list[tuple[str, str]]
+    primary_key: list[str]
+    foreign_keys: list[tuple[str, str, str]]
+    rows: int | None
+    note: str
+    hidden: bool
+    column_notes: dict[str, str]
+
+
+class TableNotesIn(BaseModel):
+    note: str = Field(default="", max_length=4000)
+    hidden: bool = False
+    column_notes: dict[str, str] = Field(default_factory=dict)
+
+
+def _database_source(db: DbSession, user: AdminUser, source_id: uuid.UUID) -> DataSource:
+    source = owned_source(db, user, source_id)
+    if source.kind in ("file", "spreadsheet"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Table notes are for connected databases.")
+    return source
+
+
+@router.get("/sources/{source_id}/tables")
+def list_tables_for_notes(source_id: uuid.UUID, db: DbSession, user: AdminUser) -> list[TableInfoOut]:
+    source = _database_source(db, user, source_id)
+    notes = source.config.get("table_notes", {})
+    return [
+        TableInfoOut(
+            name=entry["name"],
+            columns=[tuple(c) for c in entry["columns"]],
+            primary_key=entry.get("primary_key", []),
+            foreign_keys=[tuple(fk) for fk in entry.get("foreign_keys", [])],
+            rows=entry.get("rows"),
+            note=notes.get(entry["name"], {}).get("note", ""),
+            hidden=bool(notes.get(entry["name"], {}).get("hidden")),
+            column_notes=notes.get(entry["name"], {}).get("columns", {}),
+        )
+        for entry in source.config.get("schema_cache", [])
+    ]
+
+
+@router.put("/sources/{source_id}/tables/{table:path}")
+async def update_table_notes(
+    source_id: uuid.UUID, table: str, body: TableNotesIn, db: DbSession, user: AdminUser
+) -> TableInfoOut:
+    from app.connectors.databases import rebuild_schema_docs
+
+    source = _database_source(db, user, source_id)
+    cache = {entry["name"]: entry for entry in source.config.get("schema_cache", [])}
+    if table not in cache:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such table. Re-read the schema if it's new.")
+    known_columns = {c[0] for c in cache[table]["columns"]}
+    column_notes = {c: n.strip()[:1000] for c, n in body.column_notes.items() if c in known_columns and n.strip()}
+    notes = dict(source.config.get("table_notes", {}))
+    entry = {"note": body.note.strip(), "hidden": body.hidden, "columns": column_notes}
+    if any(entry.values()):
+        notes[table] = entry
+    else:
+        notes.pop(table, None)
+    source.config = {**source.config, "table_notes": notes}
+    db.commit()
+    # Re-describes just this table (no database connection needed).
+    await rebuild_schema_docs(source.id, only={table})
+    return TableInfoOut(
+        name=table,
+        columns=[tuple(c) for c in cache[table]["columns"]],
+        primary_key=cache[table].get("primary_key", []),
+        foreign_keys=[tuple(fk) for fk in cache[table].get("foreign_keys", [])],
+        rows=cache[table].get("rows"),
+        note=entry["note"],
+        hidden=entry["hidden"],
+        column_notes=column_notes,
+    )
