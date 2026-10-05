@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 
 from app.config import get_settings
@@ -72,3 +72,41 @@ async def _embedding_status() -> ServiceStatus:
 @router.get("/system/status")
 async def system_status(db: DbSession, _: AdminUser) -> list[ServiceStatus]:
     return [_database_status(db), _worker_status(db), await _embedding_status()]
+
+
+class BackupRequest(BaseModel):
+    passphrase: str = Field(min_length=12, max_length=500)
+
+
+@router.post("/system/backup")
+async def full_backup(body: BackupRequest, _: AdminUser):
+    """Everything in this install (apps, conversations, people, keys, documents and their
+    vectors), encrypted with the passphrase. Restore with `chat-builder restore`."""
+    import os
+    import tempfile
+
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+    from starlette.background import BackgroundTask
+    from starlette.concurrency import run_in_threadpool
+
+    from app.backup import BackupError, create
+
+    handle, path = tempfile.mkstemp(suffix=".cbbackup")
+
+    def build() -> None:
+        with os.fdopen(handle, "wb") as out:
+            create(out, body.passphrase)
+
+    try:
+        await run_in_threadpool(build)
+    except BackupError as exc:
+        os.unlink(path)
+        raise HTTPException(400, str(exc)) from None
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=f"chat-builder-{stamp}.cbbackup",
+        background=BackgroundTask(os.unlink, path),
+    )

@@ -9,7 +9,9 @@
 #   update            Install the latest release now
 #   check             Check GitHub for a newer release
 #   version           Show installed and latest versions
-#   backup            Back up the database to $CB_HOME/backups
+#   backup            Back up the database to $CB_HOME/backups (local, unencrypted)
+#   export FILE       Full encrypted backup of everything, for moving to a new server
+#   restore FILE      Replace everything with a full backup (asks for its passphrase)
 #   uninstall         Stop and remove containers (add --purge to delete data)
 #   watch             Updater loop (used by the updater container)
 
@@ -135,6 +137,51 @@ backup() {
   mv "$file.partial" "$file"
   # Keep the most recent backups only.
   ls -1t "$BACKUP_DIR"/chatbuilder-*.sql.gz 2>/dev/null | tail -n +$((BACKUPS_TO_KEEP + 1)) | xargs -r rm -f
+}
+
+# ------------------------------------------------------- moving an install
+
+read_passphrase() {
+  local prompt="$1" confirm="$2" first second
+  read -r -s -p "$prompt" first </dev/tty; echo >/dev/tty
+  if [ "$confirm" = "yes" ]; then
+    read -r -s -p "Repeat the passphrase: " second </dev/tty; echo >/dev/tty
+    [ "$first" = "$second" ] || die "The passphrases don't match."
+  fi
+  [ "${#first}" -ge 12 ] || die "Use a passphrase of at least 12 characters."
+  printf '%s' "$first"
+}
+
+export_instance() {
+  local file="$1"
+  [ -n "$file" ] || die "Usage: chat-builder export FILE"
+  CB_BACKUP_PASSPHRASE="$(read_passphrase "Passphrase to encrypt the backup: " yes)"
+  export CB_BACKUP_PASSPHRASE
+  # The passphrase reaches the container through the environment, never the command line.
+  compose exec -T -e CB_BACKUP_PASSPHRASE api python -m app.backup create - >"$file.partial" \
+    || { rm -f "$file.partial"; die "The backup failed."; }
+  mv "$file.partial" "$file"
+  chmod 600 "$file"
+  say "Saved $file. It holds everything, including API keys; keep it and its passphrase safe."
+}
+
+restore_instance() {
+  local file="$1" answer
+  [ -f "$file" ] || die "Usage: chat-builder restore FILE"
+  say "This replaces ALL apps, conversations, people, keys and documents in this install with the backup."
+  read -r -p "Type 'restore' to continue: " answer </dev/tty
+  [ "$answer" = "restore" ] || die "Cancelled."
+  CB_BACKUP_PASSPHRASE="$(read_passphrase "Backup passphrase: " no)"
+  export CB_BACKUP_PASSPHRASE
+  compose up -d postgres
+  compose stop api worker
+  if ! compose run --rm -T --no-deps -e CB_BACKUP_PASSPHRASE api python -m app.backup restore - <"$file"; then
+    compose up -d api worker
+    die "The restore failed; nothing was changed."
+  fi
+  # Database migrations bring an older backup up to this version on start.
+  compose up -d api worker
+  wait_healthy && say "Restored. Sign in with the accounts from the backup." || warn "Restored, but the app didn't come up healthy; check: chat-builder logs api"
 }
 
 # ------------------------------------------------------------------ health
@@ -300,6 +347,8 @@ case "$cmd" in
     apply_update "$latest"
     ;;
   backup) require_docker; backup ;;
+  export) require_docker; export_instance "${1:-}" ;;
+  restore) require_docker; restore_instance "${1:-}" ;;
   uninstall)
     require_docker
     if [ "${1:-}" = "--purge" ]; then
@@ -313,7 +362,7 @@ case "$cmd" in
     fi
     ;;
   watch) watch_loop ;;
-  help|-h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' ;;
   --update) require_docker; latest="$(latest_release)" || die "Couldn't reach GitHub."; apply_update "$latest" ;;
   *) die "Unknown command: $cmd (try: chat-builder help)" ;;
 esac

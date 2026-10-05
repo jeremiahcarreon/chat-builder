@@ -7,7 +7,12 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- Stage 2: Python app (used by both the api and worker containers) ---
-FROM python:3.12-slim
+# Debian 13 (trixie) provides PostgreSQL 17 client tools, matching the database
+# server; pg_dump and pg_restore are used for full backups.
+FROM python:3.12-slim-trixie
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
 ARG APP_VERSION=0.0.0-dev
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

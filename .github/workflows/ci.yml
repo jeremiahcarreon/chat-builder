@@ -143,6 +143,18 @@ jobs:
       - name: Smoke test
         run: scripts/smoke-test.sh http://localhost:8080 "$ADMIN_EMAIL" "$ADMIN_PASSWORD"
 
+      - name: Full backup and restore round trip
+        env:
+          CB_BACKUP_PASSPHRASE: ci-backup-passphrase
+        run: |
+          compose="docker compose --project-directory $CB_HOME -f $CB_HOME/docker-compose.yml --env-file $CB_HOME/.env"
+          scripts/smoke-test.sh http://localhost:8080 "$ADMIN_EMAIL" "$ADMIN_PASSWORD" --seed
+          $compose exec -T -e CB_BACKUP_PASSPHRASE api python -m app.backup create - > "$RUNNER_TEMP/ci.cbbackup"
+          $compose stop api worker
+          $compose run --rm -T --no-deps -e CB_BACKUP_PASSPHRASE api python -m app.backup restore - < "$RUNNER_TEMP/ci.cbbackup"
+          $compose up -d api worker
+          scripts/smoke-test.sh http://localhost:8080 "$ADMIN_EMAIL" "$ADMIN_PASSWORD" --verify
+
       - name: Updater starts and can read its configuration
         run: |
           compose="docker compose --project-directory $CB_HOME -f $CB_HOME/docker-compose.yml --env-file $CB_HOME/.env"

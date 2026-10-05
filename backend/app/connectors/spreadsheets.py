@@ -200,8 +200,13 @@ def run_sheet_query(source_id: uuid.UUID, sql: str, max_rows: int) -> str:
     role = source_role(source_id)
     with engine.connect() as conn:
         has_role = conn.scalar(text("SELECT 1 FROM pg_roles WHERE rolname = :r"), {"r": role})
-    if not has_role:
-        # Sources processed before per-source roles existed.
+        granted = has_role and all(
+            conn.scalar(text("SELECT has_table_privilege(:r, :t, 'SELECT')"), {"r": role, "t": f'{SCHEMA}."{t}"'})
+            for t in tables
+        )
+    if not granted:
+        # Sources processed before per-source roles existed, or restored from a
+        # backup (which doesn't carry grants).
         ensure_source_role(source_id, tables)
 
     raw = engine.raw_connection()

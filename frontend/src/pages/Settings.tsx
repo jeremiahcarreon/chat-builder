@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { api, type ProviderKey, type ServiceStatus } from "../api";
+import { BackupCard } from "../components/BackupCard";
 import { CloudSwitchCard } from "../components/CloudSwitchCard";
 import { PricesCard } from "../components/PricesCard";
 import { Button, Card, Input, StatusDot } from "../components/ui";
@@ -13,6 +14,7 @@ export function Settings() {
       <ProviderKeys />
       <CloudSwitchCard />
       <PricesCard />
+      <BackupCard />
       <SystemStatus />
     </div>
   );

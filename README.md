@@ -98,6 +98,27 @@ in the bottom-right corner. People sign in one of three ways:
 **Try it on a preview page** in the Deploy tab shows the widget without
 touching your site.
 
+## Move to a new server
+
+A **full backup** holds everything: apps, conversations, people, API keys,
+documents and their search index (no reprocessing needed). It's one file,
+encrypted with a passphrase you choose.
+
+1. On the old server: **Settings → Back up and move**, or
+   `chat-builder export backup.cbbackup`.
+2. Install Chat Builder on the new server.
+3. Copy the file over and run `chat-builder restore backup.cbbackup`. It asks
+   for the passphrase, replaces everything in the new install, and starts it
+   again. Sign in with your old accounts.
+
+Saved keys and passwords are re-encrypted for the new install, so its `.env`
+doesn't need the old `MASTER_KEY`. A backup restores into the same or a newer
+Chat Builder version. If the new install uses a different embedding model,
+reprocess documents afterwards.
+
+Running from source? Use the same commands with `CB_HOME` set to the
+repository folder: `CB_HOME=$PWD deploy/chat-builder restore backup.cbbackup`.
+
 ## Move or share an app
 
 **Export** (in the app editor) downloads a `.zip` with the app's settings,
