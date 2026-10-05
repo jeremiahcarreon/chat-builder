@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from sqlalchemy import Date, cast, func, select
 
 from app.deps import CurrentUser, DbSession
+from app.pricing import cost, load_custom, price_for
+from app.pricing import key as price_key
 from app.models import ChatApp, Conversation, Message, UsageEvent
 
 router = APIRouter(prefix="/api/usage", tags=["usage"])
@@ -15,6 +17,7 @@ class DayUsage(BaseModel):
     date: date
     input_tokens: int
     output_tokens: int
+    cost: float = 0.0
 
 
 class AppUsage(BaseModel):
@@ -26,6 +29,8 @@ class AppUsage(BaseModel):
     blocked: int
     tokens_today: int
     daily_token_limit: int
+    # Estimated, in US dollars, from models with a known price.
+    cost: float = 0.0
 
 
 class ModelUsage(BaseModel):
@@ -35,6 +40,8 @@ class ModelUsage(BaseModel):
     requests: int
     input_tokens: int
     output_tokens: int
+    # None when no price is set for this model.
+    cost: float | None = None
 
 
 class BlockedMessage(BaseModel):
@@ -53,6 +60,9 @@ class UsageReport(BaseModel):
     questions: int
     blocked: int
     conversations: int
+    cost: float
+    # Models used in this period with no known price (their cost isn't included).
+    unpriced_models: list[str]
     by_day: list[DayUsage]
     by_app: list[AppUsage]
     by_model: list[ModelUsage]
@@ -158,8 +168,34 @@ def usage_report(db: DbSession, user: CurrentUser, days: int = Query(30, ge=1, l
         for app_id, meta, created_at in recent
     ]
 
+    # Costs: priced per (day, app, provider, model), from built-in and owner-set prices.
+    custom = load_custom(db, user.id)
+    cost_by_day: dict = {}
+    cost_by_app: dict = {}
+    unpriced: set[str] = set()
+    for d, app_id, provider, model, i, o in db.execute(
+        select(day, events.c.app_id, events.c.provider, events.c.model,
+               func.sum(events.c.input_tokens), func.sum(events.c.output_tokens))
+        .group_by(day, events.c.app_id, events.c.provider, events.c.model)
+    ):
+        amount = cost(i or 0, o or 0, price_for(provider, model, custom))
+        if amount is None:
+            unpriced.add(price_key(provider, model))
+            continue
+        cost_by_day[d] = cost_by_day.get(d, 0.0) + amount
+        cost_by_app[app_id] = cost_by_app.get(app_id, 0.0) + amount
+    for entry in by_day:
+        entry.cost = round(cost_by_day.get(entry.date, 0.0), 6)
+    for entry in by_app:
+        entry.cost = round(cost_by_app.get(entry.app_id, 0.0), 6)
+    for entry in by_model:
+        amount = cost(entry.input_tokens, entry.output_tokens, price_for(entry.provider, entry.model, custom))
+        entry.cost = round(amount, 6) if amount is not None else None
+
     return UsageReport(
         days=days,
+        cost=round(sum(cost_by_app.values()), 6),
+        unpriced_models=sorted(unpriced),
         input_tokens=sum(a.input_tokens for a in by_app),
         output_tokens=sum(a.output_tokens for a in by_app),
         questions=sum(a.questions for a in by_app),

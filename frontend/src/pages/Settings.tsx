@@ -3,6 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { api, type ProviderKey, type ServiceStatus } from "../api";
 import { CloudSwitchCard } from "../components/CloudSwitchCard";
+import { PricesCard } from "../components/PricesCard";
 import { Button, Card, Input, StatusDot } from "../components/ui";
 
 export function Settings() {
@@ -11,6 +12,7 @@ export function Settings() {
       <h1 className="text-2xl font-semibold">Settings</h1>
       <ProviderKeys />
       <CloudSwitchCard />
+      <PricesCard />
       <SystemStatus />
     </div>
   );

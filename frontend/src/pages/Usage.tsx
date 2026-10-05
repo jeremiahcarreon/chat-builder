@@ -20,6 +20,12 @@ const VERDICT_LABELS: Record<string, string> = {
 
 const number = (n: number) => n.toLocaleString();
 
+function money(amount: number | null): string {
+  if (amount === null) return "–";
+  if (amount > 0 && amount < 0.01) return "<$0.01";
+  return amount.toLocaleString(undefined, { style: "currency", currency: "USD" });
+}
+
 function compact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k`;
@@ -59,11 +65,20 @@ export function Usage() {
         <p className="text-sm text-slate-500">Loading...</p>
       ) : (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <StatTile
+              label="Estimated cost"
+              value={money(data.cost)}
+              detail={
+                data.unpriced_models.length
+                  ? `excludes ${data.unpriced_models.length} model${data.unpriced_models.length === 1 ? "" : "s"} with no price`
+                  : `last ${data.days} days`
+              }
+            />
             <StatTile
               label="Tokens"
               value={compact(data.input_tokens + data.output_tokens)}
-              detail={`${number(data.input_tokens)} in · ${number(data.output_tokens)} out`}
+              detail={`${compact(data.input_tokens)} in · ${compact(data.output_tokens)} out`}
             />
             <StatTile label="Questions" value={number(data.questions)} detail={`last ${data.days} days`} />
             <StatTile
@@ -84,7 +99,7 @@ export function Usage() {
             <AppTable data={data} />
           </Card>
 
-          <Card title="By model" description="Chat answers and classifier checks are listed separately.">
+          <Card title="By model" description="Chat answers, classifier checks and test runs are listed separately. Costs are estimates from model prices in Settings.">
             <ModelTable data={data} />
           </Card>
 
@@ -285,6 +300,7 @@ function AppTable({ data }: { data: UsageReport }) {
             <th className="py-1 text-right font-medium">Questions</th>
             <th className="py-1 text-right font-medium">Blocked</th>
             <th className="py-1 text-right font-medium">Tokens</th>
+            <th className="py-1 text-right font-medium">Cost</th>
             <th className="py-1 pl-4 font-medium">Today vs daily limit</th>
           </tr>
         </thead>
@@ -302,6 +318,7 @@ function AppTable({ data }: { data: UsageReport }) {
                 <td className="py-2 text-right">{number(a.questions)}</td>
                 <td className="py-2 text-right">{number(a.blocked)}</td>
                 <td className="py-2 text-right">{number(a.input_tokens + a.output_tokens)}</td>
+                <td className="py-2 text-right">{money(a.cost)}</td>
                 <td className="py-2 pl-4">
                   <div className="flex items-center gap-2">
                     <div className="h-1.5 w-24 overflow-hidden rounded-full bg-slate-100">
@@ -338,6 +355,7 @@ function ModelTable({ data }: { data: UsageReport }) {
             <th className="py-1 text-right font-medium">Calls</th>
             <th className="py-1 text-right font-medium">Input</th>
             <th className="py-1 text-right font-medium">Output</th>
+            <th className="py-1 text-right font-medium">Cost</th>
           </tr>
         </thead>
         <tbody className="tabular-nums">
@@ -350,6 +368,15 @@ function ModelTable({ data }: { data: UsageReport }) {
               <td className="py-2 text-right">{number(m.requests)}</td>
               <td className="py-2 text-right">{number(m.input_tokens)}</td>
               <td className="py-2 text-right">{number(m.output_tokens)}</td>
+              <td className="py-2 text-right">
+                {m.cost === null ? (
+                  <Link to="/settings" className="text-amber-700 underline">
+                    set price
+                  </Link>
+                ) : (
+                  money(m.cost)
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

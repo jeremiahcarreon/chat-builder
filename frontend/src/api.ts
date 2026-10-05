@@ -199,7 +199,9 @@ export interface UsageReport {
   questions: number;
   blocked: number;
   conversations: number;
-  by_day: { date: string; input_tokens: number; output_tokens: number }[];
+  cost: number;
+  unpriced_models: string[];
+  by_day: { date: string; input_tokens: number; output_tokens: number; cost: number }[];
   by_app: {
     app_id: string;
     name: string;
@@ -209,8 +211,17 @@ export interface UsageReport {
     blocked: number;
     tokens_today: number;
     daily_token_limit: number;
+    cost: number;
   }[];
-  by_model: { kind: string; provider: string; model: string; requests: number; input_tokens: number; output_tokens: number }[];
+  by_model: {
+    kind: string;
+    provider: string;
+    model: string;
+    requests: number;
+    input_tokens: number;
+    output_tokens: number;
+    cost: number | null;
+  }[];
   recent_blocked: { app_id: string; app_name: string; question: string; verdict: string; reason: string; created_at: string }[];
 }
 
@@ -307,4 +318,12 @@ export interface TestResultRow {
   failures: string[];
   seconds: number | null;
   change: "regressed" | "fixed" | "new" | "same";
+}
+
+export interface ModelPrice {
+  provider: string;
+  model: string;
+  input: number | null;
+  output: number | null;
+  source: "builtin" | "custom" | "missing";
 }
