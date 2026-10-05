@@ -16,6 +16,7 @@ const blank: ChatAppInput = {
   provider: "anthropic",
   model: "claude-opus-5-5",
   personality: "",
+  knowledge_notes: "",
   in_scope: "",
   out_of_scope: "",
   refusal_message: "",
@@ -263,6 +264,18 @@ function AppSettingsForm({ initial, appId }: { initial: ChatAppInput; appId?: st
       </Card>
 
       <GuardrailsCard form={form} set={set} providers={providers} />
+
+      <Card
+        title="Product knowledge"
+        description="Rules the assistant always needs, such as how part numbers relate, what fields in your data mean, and known exceptions. Included with every question and tracked in prompt versions, so the Quality tab shows whether a change helped."
+      >
+        <Textarea
+          rows={10}
+          placeholder={"Part numbers share a base number: CC161, EC161, MC161 and AE161 are all based on 161 and have the same fitment and specs.\n- CC = 3-row, EC = 2-row, MC = 4-row, AE = 2-row with 1\" tubes.\n- FS161 is the fan shroud that fits all of the 161 radiators."}
+          value={form.knowledge_notes}
+          onChange={(e) => set("knowledge_notes", e.target.value)}
+        />
+      </Card>
 
       <Card title="Limits and sharing">
         <div className="grid gap-4 sm:grid-cols-3">

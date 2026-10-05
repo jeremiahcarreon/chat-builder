@@ -22,6 +22,7 @@ const FIELD_LABELS: Record<string, string> = {
   name: "name",
   description: "description",
   personality: "personality",
+  knowledge_notes: "product knowledge",
   in_scope: "in scope",
   out_of_scope: "out of scope",
   refusal_message: "refusal message",

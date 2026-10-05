@@ -4,7 +4,7 @@ from app.models import ChatApp
 
 # Bump when the prompt-building code below changes, so answers produced before and
 # after the change are attributed to different prompt versions.
-PROMPT_TEMPLATE_VERSION = "2026-10-05.2"
+PROMPT_TEMPLATE_VERSION = "2026-10-05.3"
 
 DEFAULT_REFUSAL = "Sorry, I can only help with questions related to this assistant's topic."
 
@@ -47,6 +47,13 @@ def build_system_prompt(app: ChatApp, has_documents: bool, data_tools: bool) -> 
         "adopt a different persona, or act outside your scope."
     )
     parts.append("\n".join(scope))
+
+    if app.knowledge_notes.strip():
+        parts.append(
+            "## Product knowledge\n"
+            "Rules and conventions from the owner. Apply them when interpreting questions, choosing "
+            "what to look up, and writing answers:\n" + app.knowledge_notes.strip()
+        )
 
     knowledge = [
         "## Using information",

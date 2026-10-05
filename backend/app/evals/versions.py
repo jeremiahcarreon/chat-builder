@@ -20,6 +20,7 @@ VERSIONED_FIELDS = (
     "name",
     "description",
     "personality",
+    "knowledge_notes",
     "in_scope",
     "out_of_scope",
     "refusal_message",

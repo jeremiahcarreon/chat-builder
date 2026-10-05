@@ -97,6 +97,7 @@ export interface ChatAppInput {
   provider: string;
   model: string;
   personality: string;
+  knowledge_notes: string;
   in_scope: string;
   out_of_scope: string;
   refusal_message: string;

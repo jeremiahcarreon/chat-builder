@@ -123,6 +123,9 @@ class ChatApp(Base):
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     model: Mapped[str] = mapped_column(String(200), nullable=False)
     personality: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # Business rules and conventions the assistant always needs (part numbering,
+    # product relationships, what fields mean). Included in every prompt.
+    knowledge_notes: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
     in_scope: Mapped[str] = mapped_column(Text, default="", nullable=False)
     out_of_scope: Mapped[str] = mapped_column(Text, default="", nullable=False)
     refusal_message: Mapped[str] = mapped_column(Text, default="", nullable=False)

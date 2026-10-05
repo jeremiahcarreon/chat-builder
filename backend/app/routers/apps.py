@@ -22,6 +22,7 @@ class AppIn(BaseModel):
     provider: str
     model: str = Field(min_length=1, max_length=200)
     personality: str = Field(default="", max_length=LONG_TEXT)
+    knowledge_notes: str = Field(default="", max_length=50_000)
     in_scope: str = Field(default="", max_length=LONG_TEXT)
     out_of_scope: str = Field(default="", max_length=LONG_TEXT)
     refusal_message: str = Field(default="", max_length=2_000)
