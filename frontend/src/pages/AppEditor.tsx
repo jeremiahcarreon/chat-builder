@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import { api, type ChatApp, type ChatAppInput, type CloudSwitch, type ProviderKey } from "../api";
 import { ChatPanel } from "../components/ChatPanel";
 import { Button, Card, Field, Input, Select, Tabs, Textarea, Toggle } from "../components/ui";
+import { ExportButton } from "../components/ExportDialog";
 import { DataSourcesTab } from "./DataSourcesTab";
 import { DeployTab } from "./DeployTab";
 import { QualityTab } from "./QualityTab";
@@ -65,7 +66,9 @@ export function AppEditor() {
           </Link>
           <h1 className="text-2xl font-semibold">{app.name}</h1>
         </div>
-        <a
+        <div className="flex gap-2">
+          <ExportButton appId={app.id} />
+          <a
           href={`/chat/${app.id}`}
           target="_blank"
           rel="noreferrer"
@@ -73,6 +76,7 @@ export function AppEditor() {
         >
           Open chat page <ExternalLink size={14} />
         </a>
+        </div>
       </div>
       <Tabs
         tabs={[

@@ -98,6 +98,20 @@ in the bottom-right corner. People sign in one of three ways:
 **Try it on a preview page** in the Deploy tab shows the widget without
 touching your site.
 
+## Move or share an app
+
+**Export** (in the app editor) downloads a `.zip` with the app's settings,
+product knowledge, data sources (uploaded files, and database connections
+with their table notes) and test set. **Import app** (on the Chat Apps page)
+recreates it in any Chat Builder install. Conversations, feedback and the
+workspace's provider API keys are not included.
+
+Database passwords and the widget's signing secret are left out unless you
+tick **Include database passwords and the widget's signing secret**, which is
+meant for moving to a new server; keep that file safe. Without them, enter
+the passwords after importing, and update embedding sites with the app's new
+signing secret.
+
 ## Manage it
 
 ```bash
