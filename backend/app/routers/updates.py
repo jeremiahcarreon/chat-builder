@@ -35,6 +35,18 @@ class UpdateStatus(BaseModel):
     auto_update_at: datetime | None = None
     release_url: str | None = None
     requested: bool = False
+    # The request has waited longer than the updater ever should (it checks every 30s).
+    stalled: bool = False
+
+
+STALLED_AFTER_SECONDS = 300
+
+
+def _age_seconds(path: Path) -> float:
+    try:
+        return datetime.now(UTC).timestamp() - path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def _timestamp(value) -> datetime | None:
@@ -51,6 +63,7 @@ def read_status() -> UpdateStatus:
     except (OSError, ValueError):
         return UpdateStatus(current=__version__, managed=True, status="unknown", message="Update status unreadable")
     latest = state.get("latest") or None
+    requested = (directory / "update-requested").exists() and state.get("status") != "updating"
     return UpdateStatus(
         current=__version__,
         managed=True,
@@ -61,7 +74,8 @@ def read_status() -> UpdateStatus:
         checked_at=_timestamp(state.get("checked_at")),
         auto_update_at=_timestamp(state.get("auto_update_at")),
         release_url=state.get("release_url") if latest else None,
-        requested=(directory / "update-requested").exists(),
+        requested=requested,
+        stalled=requested and _age_seconds(directory / "update-requested") > STALLED_AFTER_SECONDS,
     )
 
 

@@ -46,3 +46,16 @@ def test_request_flag(state_dir):
     _write(state_dir, latest="0.2.0", status="available")
     (state_dir / "update-requested").write_text("now")
     assert updates.read_status().requested
+
+
+def test_stalled_request(state_dir):
+    import os
+    import time
+
+    _write(state_dir, latest="0.2.0", status="available")
+    request = state_dir / "update-requested"
+    request.write_text("now")
+    assert not updates.read_status().stalled
+    old = time.time() - 600
+    os.utime(request, (old, old))
+    assert updates.read_status().stalled

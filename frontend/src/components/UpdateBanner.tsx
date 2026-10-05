@@ -27,7 +27,7 @@ export function UpdateBanner() {
   });
 
   if (!data?.managed || !data.available || !data.latest) return null;
-  const installing = data.status === "updating" || data.requested || apply.isPending;
+  const installing = (data.status === "updating" || data.requested || apply.isPending) && !data.stalled;
 
   return (
     <div className="flex flex-wrap items-center gap-3 border-b border-sky-200 bg-sky-50 px-8 py-2.5 text-sm text-sky-900">
@@ -46,6 +46,8 @@ export function UpdateBanner() {
             Version <strong>{data.latest}</strong> is available (you have {data.current}).
             {data.auto_update_at && ` It will install automatically ${when(data.auto_update_at)}.`}
             {data.status === "failed" && data.message && ` Last attempt: ${data.message}`}
+            {data.stalled &&
+              " The updater hasn't picked up the request. Check that it's running with 'chat-builder status', or run 'chat-builder update'."}
           </span>
           {data.release_url && (
             <a href={data.release_url} target="_blank" rel="noreferrer" className="underline">

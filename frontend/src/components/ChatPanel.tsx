@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, MessageSquarePlus, Send, Trash2 } from "lucide-react";
+import { Loader2, MessageSquarePlus, Send, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -92,6 +92,10 @@ export function ChatPanel({ appId, className = "" }: { appId: string; className?
             case "error":
               updateLast((m) => ({ ...m, content: m.content || ev.message, error: !m.content }));
               break;
+            case "done":
+              // The saved message's id, so the answer can be rated.
+              updateLast((m) => ({ ...m, id: ev.message_id }));
+              break;
           }
         },
         controller.signal,
@@ -157,8 +161,15 @@ export function ChatPanel({ appId, className = "" }: { appId: string; className?
               </p>
             </div>
           )}
-          {messages.map((m) => (
-            <MessageBubble key={m.id} message={m} />
+          {messages.map((m, i) => (
+            <MessageBubble
+              key={m.id}
+              message={m}
+              appId={appId}
+              // Rating is offered once an answer has finished streaming.
+              rateable={!(busy && i === messages.length - 1)}
+              onRated={(rated) => setMessages((prev) => prev.map((x) => (x.id === rated.id ? { ...x, ...rated } : x)))}
+            />
           ))}
           {status && (
             <div className="flex items-center gap-2 text-sm text-slate-500">
@@ -193,7 +204,17 @@ export function ChatPanel({ appId, className = "" }: { appId: string; className?
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  message,
+  appId,
+  rateable,
+  onRated,
+}: {
+  message: ChatMessage;
+  appId: string;
+  rateable: boolean;
+  onRated: (message: ChatMessage) => void;
+}) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -211,9 +232,99 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   if (!message.content) return null;
   return (
     <div className="flex">
-      <div className={`prose-chat max-w-[85%] rounded-2xl rounded-bl-sm border px-4 py-2 text-sm ${tone}`}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+      <div className="max-w-[85%]">
+        <div className={`prose-chat rounded-2xl rounded-bl-sm border px-4 py-2 text-sm ${tone}`}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+        </div>
+        {rateable && typeof message.id === "number" && !message.error && (
+          <FeedbackBar message={message} appId={appId} onRated={onRated} />
+        )}
       </div>
+    </div>
+  );
+}
+
+/** "Was this helpful?" with thumbs up/down, and a comment box after thumbs down. */
+function FeedbackBar({
+  message,
+  appId,
+  onRated,
+}: {
+  message: ChatMessage;
+  appId: string;
+  onRated: (message: ChatMessage) => void;
+}) {
+  const [asking, setAsking] = useState(false);
+  const [comment, setComment] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function rate(rating: 1 | -1, feedback?: string) {
+    setSaving(true);
+    try {
+      const saved = await api<ChatMessage>(`/api/chat/${appId}/messages/${message.id}/feedback`, {
+        method: "POST",
+        body: JSON.stringify({ rating, feedback }),
+      });
+      onRated({ ...message, rating: saved.rating, feedback: saved.feedback });
+      setAsking(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (message.rating === 1) {
+    return <p className="mt-1 px-1 text-xs text-slate-500">Thanks, glad it helped.</p>;
+  }
+  if (message.rating === -1 && !asking) {
+    return (
+      <p className="mt-1 px-1 text-xs text-slate-500">
+        Thanks for the feedback{message.feedback ? "" : "."}
+        {!message.feedback && (
+          <button onClick={() => setAsking(true)} className="ml-1 underline">
+            Tell us what was wrong
+          </button>
+        )}
+      </p>
+    );
+  }
+  if (asking) {
+    return (
+      <form
+        className="mt-2 space-y-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          rate(-1, comment);
+        }}
+      >
+        <textarea
+          autoFocus
+          rows={2}
+          maxLength={4000}
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          placeholder="What was wrong or missing? (optional)"
+          className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500"
+        />
+        <div className="flex gap-2">
+          <button type="submit" disabled={saving} className="rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white">
+            Send feedback
+          </button>
+          <button type="button" onClick={() => rate(-1)} disabled={saving} className="px-2 text-xs text-slate-500 hover:underline">
+            Skip
+          </button>
+        </div>
+      </form>
+    );
+  }
+  return (
+    <div className="mt-1 flex items-center gap-1 px-1 text-xs text-slate-500">
+      <span>Was this helpful?</span>
+      <button onClick={() => rate(1)} disabled={saving} className="rounded p-1 hover:bg-slate-100 hover:text-emerald-700" aria-label="Helpful">
+        <ThumbsUp size={14} />
+      </button>
+      <button onClick={() => setAsking(true)} disabled={saving} className="rounded p-1 hover:bg-slate-100 hover:text-red-700" aria-label="Not helpful">
+        <ThumbsDown size={14} />
+      </button>
     </div>
   );
 }

@@ -103,6 +103,8 @@ export interface ChatMessage {
   content: string;
   blocked?: boolean;
   error?: boolean;
+  rating?: 1 | -1 | null;
+  feedback?: string | null;
 }
 
 export type ChatEvent =
@@ -231,4 +233,78 @@ export interface UpdateStatus {
   auto_update_at: string | null;
   release_url: string | null;
   requested: boolean;
+  stalled: boolean;
+}
+
+export interface PromptVersionSummary {
+  id: number;
+  number: number;
+  created_at: string;
+  note: string;
+  changed: string[];
+  answers: number;
+  helpful: number;
+  not_helpful: number;
+  test_passed: number | null;
+  test_total: number | null;
+}
+
+export interface PromptVersionDetail extends PromptVersionSummary {
+  settings: Record<string, unknown>;
+  system_prompt: string;
+  template_version: string;
+}
+
+export interface RatedAnswer {
+  message_id: number;
+  conversation_id: string;
+  question: string;
+  answer: string;
+  rating: 1 | -1;
+  feedback: string | null;
+  version_number: number | null;
+  model: string | null;
+  rated_at: string | null;
+  test_case_id: string | null;
+}
+
+export interface TestCaseInput {
+  question: string;
+  expectation: "answer" | "refuse";
+  must_include: string;
+  reference_answer: string;
+  notes: string;
+}
+
+export interface TestCase extends TestCaseInput {
+  id: string;
+  source_message_id: number | null;
+  created_at: string;
+  last_passed: boolean | null;
+}
+
+export interface TestRunSummary {
+  id: string;
+  status: "queued" | "running" | "done" | "failed";
+  error: string | null;
+  version_number: number | null;
+  total: number;
+  passed: number;
+  completed: number;
+  regressions: number;
+  fixed: number;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface TestResultRow {
+  case_id: string;
+  question: string;
+  expectation: "answer" | "refuse";
+  passed: boolean;
+  blocked: boolean;
+  answer: string;
+  failures: string[];
+  seconds: number | null;
+  change: "regressed" | "fixed" | "new" | "same";
 }
