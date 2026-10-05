@@ -100,6 +100,7 @@ export function SourceList({ sources, showApp = false }: { sources: DataSource[]
               {summary(source)}
             </div>
             {source.error && <div className="mt-1 text-xs text-red-600">{source.error}</div>}
+            {source.kind === "file" && <SkuTags source={source} onSaved={refresh} />}
             {editing === source.id && (
               <DatabaseForm appId={source.app_id} existing={source} onDone={() => setEditing(null)} />
             )}
@@ -147,4 +148,59 @@ export function SourceList({ sources, showApp = false }: { sources: DataSource[]
 
 export function isBusy(sources: DataSource[] | undefined): boolean {
   return !!sources?.some((s) => s.status === "pending" || s.status === "processing");
+}
+
+/** SKU tags on a document: questions naming one of these SKUs search this document first. */
+function SkuTags({ source, onSaved }: { source: DataSource; onSaved: () => void }) {
+  const tags = (source.details.skus as unknown as string[] | undefined) ?? [];
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(tags.join(", "));
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/api/sources/${source.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ skus: value.split(/[,\s]+/).filter(Boolean) }),
+      }),
+    onSuccess: () => {
+      setEditing(false);
+      onSaved();
+    },
+  });
+  if (editing) {
+    return (
+      <form
+        className="mt-1 flex items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          save.mutate();
+        }}
+      >
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="SKUs, e.g. RK-2, RK-2HD"
+          className="w-64 rounded border border-slate-300 px-2 py-1 text-xs"
+        />
+        <button type="submit" className="text-xs font-medium text-slate-900 underline" disabled={save.isPending}>
+          Save
+        </button>
+        <button type="button" className="text-xs text-slate-500" onClick={() => setEditing(false)}>
+          Cancel
+        </button>
+      </form>
+    );
+  }
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
+      {tags.map((tag) => (
+        <span key={tag} className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-slate-700">
+          {tag}
+        </span>
+      ))}
+      <button onClick={() => { setValue(tags.join(", ")); setEditing(true); }} className="text-slate-500 underline" title="Questions naming one of these SKUs search this document first">
+        {tags.length ? "edit SKUs" : "tag SKUs"}
+      </button>
+    </div>
+  );
 }

@@ -24,7 +24,11 @@ See [OVERVIEW.md](OVERVIEW.md) for the design.
    for satisfaction reviews. Check that System status is all green.
 2. **Chat Apps → New app:** name, description, model, personality, what's in
    and out of scope, and the refusal message.
-3. **Data sources:** upload files or connect a database.
+3. **Data sources:** upload files or connect a database (use a read-only
+   login). For databases, open **Tables** to explain cryptic table and column
+   names and hide tables. Tag documents with the SKUs they cover.
+   Put business rules (like how part numbers relate) in **Product knowledge**
+   on the Settings tab.
 4. **Try it:** ask in-scope, off-topic and data questions.
 5. **Quality:** add a few test questions and run them; run them again after
    any change to the prompt or model.

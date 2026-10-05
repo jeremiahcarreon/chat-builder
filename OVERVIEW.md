@@ -111,8 +111,23 @@ update status. There's no Redis: Postgres also runs the job queue.
 
 ### Connecting a database
 1. Enter host/IP, port, username, password and database (SQLite uses an
-   uploaded file), and use **Test connection**.
-2. The app reads the schema and embeds a description of each table.
+   uploaded file), a query time limit, and for SQL Server whether to read
+   without waiting on other users' changes. Use **Test connection**.
+2. The app reads every table's columns, primary key, foreign keys and
+   approximate row count from the database catalog, and embeds a description
+   of each table, including what it joins to and what references it.
+3. In the **Tables** panel, owners add notes to tables and columns
+   (essential for cryptic ERP names) and hide tables the assistant must never
+   use. Hidden tables can't be found or queried.
+4. During a chat, the model can call `find_tables` and `describe_table` to
+   look beyond the few tables it's shown for a question.
+
+### Documents tagged by SKU
+Documents can carry SKU tags, set automatically when the file name contains
+part numbers ("RK-2 install instructions.pdf") and editable. When a question
+names a SKU, documents tagged with it are searched first and documents tagged
+only with other SKUs are left out; untagged documents are always searched.
+Matching ignores case, spaces and dashes.
 
 ### Chatting
 1. **Rate limits:** messages per minute per person, tokens per day per app.
@@ -246,6 +261,9 @@ chatting with that one app, never for the dashboard (even for admins).
 - **Response style:** temperature (or the model's default) and seed
 - **Personality and scope:** personality, in scope, out of scope, refusal
   message, strict mode (answer only from attached data)
+- **Product knowledge:** rules the assistant always needs (part-number
+  relationships, what data fields mean), included in every prompt and
+  versioned
 - **Guardrails:** classifier on/off, strictness, model, behavior if it's down
 - **Limits and sharing:** answer length, messages per minute, daily tokens,
   public chat page

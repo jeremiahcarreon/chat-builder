@@ -14,6 +14,8 @@ from app.ingest import clear_index
 from app.models import ChatApp, DataSource
 from app.queue import queue
 from app.rag.parsing import DOCUMENT_EXTENSIONS
+from app.rag.skus import from_filename
+from app.rag.skus import key as sku_key
 from app.routers.apps import owned_app
 
 router = APIRouter(prefix="/api", tags=["sources"])
@@ -40,7 +42,7 @@ class SourceOut(BaseModel):
 PUBLIC_CONFIG = {
     "filename", "size", "chunk_count", "page_count", "table_count", "row_count",
     "host", "port", "database", "username", "encryption", "require_tls", "schemas",
-    "query_timeout", "dirty_reads", "hidden_count",
+    "query_timeout", "dirty_reads", "hidden_count", "skus",
 }
 
 
@@ -144,6 +146,9 @@ async def upload_files(
                 shutil.rmtree(source_dir(previous.id), ignore_errors=True)
             raise
         source.config = {"path": str(path), "filename": filename, "size": size}
+        if kind == "file":
+            # Install instructions and the like often name their part in the file name.
+            tag_skus(source, from_filename(filename))
         created.append(source)
 
     db.add_all(created)
@@ -154,13 +159,25 @@ async def upload_files(
 
 
 class RenameSource(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    # Documents: the SKUs this document is about (e.g. install instructions for one kit).
+    skus: list[str] | None = Field(default=None, max_length=200)
+
+
+def tag_skus(source: DataSource, skus: list[str]) -> None:
+    cleaned = list(dict.fromkeys(s.strip().upper() for s in skus if s.strip()))[:200]
+    source.config = {**source.config, "skus": cleaned, "sku_keys": [sku_key(s) for s in cleaned]}
 
 
 @router.patch("/sources/{source_id}")
-def rename_source(source_id: uuid.UUID, body: RenameSource, db: DbSession, user: AdminUser) -> SourceOut:
+def update_source(source_id: uuid.UUID, body: RenameSource, db: DbSession, user: AdminUser) -> SourceOut:
     source = owned_source(db, user, source_id)
-    source.name = body.name.strip()
+    if body.name is not None:
+        source.name = body.name.strip()
+    if body.skus is not None:
+        if source.kind != "file":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "SKU tags are for documents.")
+        tag_skus(source, body.skus)
     db.commit()
     return source_out(source)
 

@@ -11,7 +11,9 @@ from app.db import SessionLocal
 from app.llm.base import ToolCall, ToolResult, ToolSpec
 from app.models import ChatApp, DataSource
 from app.rag.embeddings import EmbeddingError, embed_query
-from app.rag.retrieval import search_chunks
+from app.rag.retrieval import TOP_K, search_chunks
+from app.rag.skus import find_skus
+from app.rag.skus import key as sku_key
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +67,8 @@ async def gather(app: ChatApp, question: str, history: list[tuple[str, str]]) ->
         return ctx
 
     if documents:
-        excerpts = await asyncio.to_thread(search_chunks, app.id, query_vector)
+        sku_keys = [sku_key(s) for s in find_skus(question)]
+        excerpts = await asyncio.to_thread(search_chunks, app.id, query_vector, TOP_K, sku_keys or None)
         ctx.excerpts = [(e.label, e.text) for e in excerpts]
         ctx.source_names = list(dict.fromkeys(e.source_name for e in excerpts))
     if ctx.queryable:
