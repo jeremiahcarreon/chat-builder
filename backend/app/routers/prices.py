@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import distinct, select
 
-from app.deps import CurrentUser, DbSession
+from app.deps import AdminUser, DbSession
 from app.models import ChatApp, UsageEvent
 from app.pricing import builtin_price, key, load_custom, save_custom
 from app.providers import PROVIDERS
@@ -27,13 +27,13 @@ class PriceIn(BaseModel):
 
 
 @router.get("")
-def list_prices(db: DbSession, user: CurrentUser) -> list[PriceOut]:
+def list_prices(db: DbSession, user: AdminUser) -> list[PriceOut]:
     """Prices for every model this account has used, plus any set by hand."""
     custom = load_custom(db, user.id)
     used = db.execute(
         select(distinct(UsageEvent.provider), UsageEvent.model)
         .join(ChatApp, ChatApp.id == UsageEvent.app_id)
-        .where(ChatApp.owner_id == user.id)
+        
     ).all()
     pairs = {(p, m) for p, m in used} | {tuple(k.split("/", 1)) for k in custom}
     out = []
@@ -48,7 +48,7 @@ def list_prices(db: DbSession, user: CurrentUser) -> list[PriceOut]:
 
 
 @router.put("")
-def set_price(body: PriceIn, db: DbSession, user: CurrentUser) -> list[PriceOut]:
+def set_price(body: PriceIn, db: DbSession, user: AdminUser) -> list[PriceOut]:
     if body.provider not in PROVIDERS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown provider")
     custom = load_custom(db, user.id)
@@ -58,7 +58,7 @@ def set_price(body: PriceIn, db: DbSession, user: CurrentUser) -> list[PriceOut]
 
 
 @router.delete("")
-def reset_price(provider: str, model: str, db: DbSession, user: CurrentUser) -> list[PriceOut]:
+def reset_price(provider: str, model: str, db: DbSession, user: AdminUser) -> list[PriceOut]:
     custom = load_custom(db, user.id)
     custom.pop(key(provider, model), None)
     save_custom(db, user.id, custom)

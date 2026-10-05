@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.crypto import decrypt, encrypt
-from app.deps import CurrentUser, DbSession
+from app.deps import AdminUser, DbSession
 from app.llm.sampling import support
 from app.models import ProviderKey
 from app.providers import (
@@ -15,6 +15,7 @@ from app.providers import (
     key_context,
     list_models,
     test_api_key,
+    workspace_key,
 )
 
 router = APIRouter(prefix="/api/settings/providers", tags=["settings"])
@@ -46,10 +47,8 @@ def _check_provider(provider: str, *, key_required: bool = False) -> None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This provider doesn't use an API key")
 
 
-def _get_key(db: DbSession, user: CurrentUser, provider: str) -> ProviderKey | None:
-    return db.scalar(
-        select(ProviderKey).where(ProviderKey.user_id == user.id, ProviderKey.provider == provider)
-    )
+def _get_key(db: DbSession, user: AdminUser, provider: str) -> ProviderKey | None:
+    return workspace_key(db, provider)
 
 
 def _out(provider: str, row: ProviderKey | None) -> ProviderKeyOut:
@@ -73,17 +72,17 @@ def _out(provider: str, row: ProviderKey | None) -> ProviderKeyOut:
 
 
 @router.get("")
-def list_keys(db: DbSession, user: CurrentUser) -> list[ProviderKeyOut]:
+def list_keys(db: DbSession, user: AdminUser) -> list[ProviderKeyOut]:
     rows = {
         row.provider: row
-        for row in db.scalars(select(ProviderKey).where(ProviderKey.user_id == user.id))
+        for row in db.scalars(select(ProviderKey).order_by(ProviderKey.updated_at))
     }
     return [_out(provider, rows.get(provider)) for provider in PROVIDERS]
 
 
 @router.put("/{provider}")
 async def save_key(
-    provider: str, body: SaveKeyRequest, db: DbSession, user: CurrentUser
+    provider: str, body: SaveKeyRequest, db: DbSession, user: AdminUser
 ) -> ProviderKeyOut:
     _check_provider(provider, key_required=True)
     api_key = body.api_key.strip()
@@ -103,7 +102,7 @@ async def save_key(
 
 
 @router.post("/{provider}/test")
-async def test_key(provider: str, db: DbSession, user: CurrentUser) -> ProviderKeyOut:
+async def test_key(provider: str, db: DbSession, user: AdminUser) -> ProviderKeyOut:
     _check_provider(provider)
     if not PROVIDERS[provider].needs_key:
         ok, error = await test_api_key(provider, "")
@@ -122,7 +121,7 @@ async def test_key(provider: str, db: DbSession, user: CurrentUser) -> ProviderK
 
 
 @router.delete("/{provider}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_key(provider: str, db: DbSession, user: CurrentUser) -> None:
+def delete_key(provider: str, db: DbSession, user: AdminUser) -> None:
     _check_provider(provider, key_required=True)
     row = _get_key(db, user, provider)
     if row is not None:
@@ -131,7 +130,7 @@ def delete_key(provider: str, db: DbSession, user: CurrentUser) -> None:
 
 
 @router.get("/{provider}/models")
-async def provider_models(provider: str, db: DbSession, user: CurrentUser) -> list[str]:
+async def provider_models(provider: str, db: DbSession, user: AdminUser) -> list[str]:
     """Model IDs the saved key can use, for the model picker."""
     _check_provider(provider)
     try:
@@ -147,7 +146,7 @@ class SamplingSupportOut(BaseModel):
 
 
 @router.get("/{provider}/sampling")
-def sampling_support(provider: str, model: str, _: CurrentUser) -> SamplingSupportOut:
+def sampling_support(provider: str, model: str, _: AdminUser) -> SamplingSupportOut:
     """Whether a model accepts temperature and seed, for the app editor's slider."""
     _check_provider(provider)
     result = support(provider, model)

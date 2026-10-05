@@ -47,8 +47,30 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), default="", server_default="", nullable=False)
+    # Set for people signed in by an embedding site (the site's own username).
+    username: Mapped[str | None] = mapped_column(String(200), unique=True)
+    # None until an invited person sets a password; embed-only people never have one.
+    password_hash: Mapped[str | None] = mapped_column(Text)
+    # Admins manage apps, keys and settings; members only chat with apps they can access.
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # local: created in Chat Builder; embed: created by a signed identity from an embedding site.
+    source: Mapped[str] = mapped_column(String(16), default="local", server_default="local", nullable=False)
+    blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    # SHA-256 of a one-time link for setting a password (invites and resets).
+    invite_token_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    invite_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created_at()
+
+
+class AppAccess(Base):
+    """A member's access to a chat app (admins can use every app)."""
+
+    __tablename__ = "app_access"
+
+    app_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_apps.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
     created_at: Mapped[datetime] = _created_at()
 
 

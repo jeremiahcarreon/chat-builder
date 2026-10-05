@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, case, func, select
 
-from app.deps import CurrentUser, DbSession
+from app.deps import AdminUser, DbSession
 from app.evals.review import waiting_count
 from app.evals.versions import changes, current_version
 from app.models import ChatApp, Conversation, Message, PromptVersion, TestCase, TestResult, TestRun
@@ -128,12 +128,12 @@ def _version_rows(db: DbSession, app: ChatApp) -> list[VersionOut]:
 
 
 @router.get("/versions")
-def list_versions(app_id: uuid.UUID, db: DbSession, user: CurrentUser) -> list[VersionOut]:
+def list_versions(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> list[VersionOut]:
     return _version_rows(db, owned_app(db, user, app_id))
 
 
 @router.get("/versions/{version_id}")
-def get_version(app_id: uuid.UUID, version_id: int, db: DbSession, user: CurrentUser) -> VersionDetail:
+def get_version(app_id: uuid.UUID, version_id: int, db: DbSession, user: AdminUser) -> VersionDetail:
     app = owned_app(db, user, app_id)
     version = db.get(PromptVersion, version_id)
     if version is None or version.app_id != app.id:
@@ -148,7 +148,7 @@ def get_version(app_id: uuid.UUID, version_id: int, db: DbSession, user: Current
 
 
 @router.patch("/versions/{version_id}")
-def label_version(app_id: uuid.UUID, version_id: int, body: VersionNote, db: DbSession, user: CurrentUser) -> dict:
+def label_version(app_id: uuid.UUID, version_id: int, body: VersionNote, db: DbSession, user: AdminUser) -> dict:
     app = owned_app(db, user, app_id)
     version = db.get(PromptVersion, version_id)
     if version is None or version.app_id != app.id:
@@ -178,7 +178,7 @@ class RatedAnswer(BaseModel):
 def list_feedback(
     app_id: uuid.UUID,
     db: DbSession,
-    user: CurrentUser,
+    user: AdminUser,
     rating: Literal["all", "helpful", "not_helpful"] = "all",
     version_id: int | None = None,
     limit: int = Query(100, ge=1, le=500),
@@ -273,7 +273,7 @@ def _case_out(test_case: TestCase, last_passed: bool | None = None) -> CaseOut:
 
 
 @router.get("/tests")
-def list_cases(app_id: uuid.UUID, db: DbSession, user: CurrentUser) -> list[CaseOut]:
+def list_cases(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> list[CaseOut]:
     app = owned_app(db, user, app_id)
     last_run = db.scalar(
         select(TestRun.id).where(TestRun.app_id == app.id, TestRun.status == "done").order_by(TestRun.created_at.desc()).limit(1)
@@ -284,7 +284,7 @@ def list_cases(app_id: uuid.UUID, db: DbSession, user: CurrentUser) -> list[Case
 
 
 @router.post("/tests", status_code=status.HTTP_201_CREATED)
-def create_case(app_id: uuid.UUID, body: CaseIn, db: DbSession, user: CurrentUser) -> CaseOut:
+def create_case(app_id: uuid.UUID, body: CaseIn, db: DbSession, user: AdminUser) -> CaseOut:
     app = owned_app(db, user, app_id)
     test_case = TestCase(app_id=app.id, **body.model_dump())
     db.add(test_case)
@@ -293,7 +293,7 @@ def create_case(app_id: uuid.UUID, body: CaseIn, db: DbSession, user: CurrentUse
 
 
 @router.post("/tests/from-answer/{message_id}", status_code=status.HTTP_201_CREATED)
-def case_from_answer(app_id: uuid.UUID, message_id: int, body: CaseFromAnswer, db: DbSession, user: CurrentUser) -> CaseOut:
+def case_from_answer(app_id: uuid.UUID, message_id: int, body: CaseFromAnswer, db: DbSession, user: AdminUser) -> CaseOut:
     """Turns a rated answer into a test case. A helpful answer becomes the reference answer."""
     app = owned_app(db, user, app_id)
     message = db.get(Message, message_id)
@@ -324,7 +324,7 @@ def case_from_answer(app_id: uuid.UUID, message_id: int, body: CaseFromAnswer, d
 
 
 @router.put("/tests/{case_id}")
-def update_case(app_id: uuid.UUID, case_id: uuid.UUID, body: CaseIn, db: DbSession, user: CurrentUser) -> CaseOut:
+def update_case(app_id: uuid.UUID, case_id: uuid.UUID, body: CaseIn, db: DbSession, user: AdminUser) -> CaseOut:
     app = owned_app(db, user, app_id)
     test_case = _owned_case(db, app, case_id)
     for key, value in body.model_dump().items():
@@ -334,7 +334,7 @@ def update_case(app_id: uuid.UUID, case_id: uuid.UUID, body: CaseIn, db: DbSessi
 
 
 @router.delete("/tests/{case_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_case(app_id: uuid.UUID, case_id: uuid.UUID, db: DbSession, user: CurrentUser) -> None:
+def delete_case(app_id: uuid.UUID, case_id: uuid.UUID, db: DbSession, user: AdminUser) -> None:
     app = owned_app(db, user, app_id)
     db.delete(_owned_case(db, app, case_id))
     db.commit()
@@ -424,7 +424,7 @@ def _owned_run(db: DbSession, app: ChatApp, run_id: uuid.UUID) -> TestRun:
 
 
 @router.post("/runs", status_code=status.HTTP_201_CREATED)
-async def start_run(app_id: uuid.UUID, db: DbSession, user: CurrentUser) -> RunOut:
+async def start_run(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> RunOut:
     app = owned_app(db, user, app_id)
     count = db.scalar(select(func.count()).select_from(TestCase).where(TestCase.app_id == app.id))
     if not count:
@@ -443,14 +443,14 @@ async def start_run(app_id: uuid.UUID, db: DbSession, user: CurrentUser) -> RunO
 
 
 @router.get("/runs")
-def list_runs(app_id: uuid.UUID, db: DbSession, user: CurrentUser) -> list[RunOut]:
+def list_runs(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> list[RunOut]:
     app = owned_app(db, user, app_id)
     runs = db.scalars(select(TestRun).where(TestRun.app_id == app.id).order_by(TestRun.created_at.desc()).limit(50))
     return [_run_out(db, run) for run in runs]
 
 
 @router.get("/runs/{run_id}")
-def run_results(app_id: uuid.UUID, run_id: uuid.UUID, db: DbSession, user: CurrentUser) -> list[ResultOut]:
+def run_results(app_id: uuid.UUID, run_id: uuid.UUID, db: DbSession, user: AdminUser) -> list[ResultOut]:
     app = owned_app(db, user, app_id)
     run = _owned_run(db, app, run_id)
     previous_run = _previous_run(db, run)
@@ -513,7 +513,7 @@ class TranscriptMessage(BaseModel):
 
 
 @router.get("/reviews")
-def review_summary(app_id: uuid.UUID, db: DbSession, user: CurrentUser) -> ReviewSummary:
+def review_summary(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> ReviewSummary:
     app = owned_app(db, user, app_id)
     avg, reviewed, resolved = db.execute(
         select(func.avg(Conversation.satisfaction), func.count(), func.avg(Conversation.resolved))
@@ -532,7 +532,7 @@ def review_summary(app_id: uuid.UUID, db: DbSession, user: CurrentUser) -> Revie
 def reviewed_conversations(
     app_id: uuid.UUID,
     db: DbSession,
-    user: CurrentUser,
+    user: AdminUser,
     order: Literal["lowest", "highest", "recent"] = "lowest",
     limit: int = Query(25, ge=1, le=200),
 ) -> list[ReviewedConversation]:
@@ -569,7 +569,7 @@ def reviewed_conversations(
 
 @router.get("/reviews/conversations/{conversation_id}")
 def conversation_transcript(
-    app_id: uuid.UUID, conversation_id: uuid.UUID, db: DbSession, user: CurrentUser
+    app_id: uuid.UUID, conversation_id: uuid.UUID, db: DbSession, user: AdminUser
 ) -> list[TranscriptMessage]:
     """The full conversation, for the app owner reviewing quality (including visitors' chats)."""
     app = owned_app(db, user, app_id)
@@ -595,7 +595,7 @@ def conversation_transcript(
 
 
 @router.post("/reviews/run", status_code=status.HTTP_202_ACCEPTED)
-async def review_now(app_id: uuid.UUID, db: DbSession, user: CurrentUser) -> dict:
+async def review_now(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> dict:
     """Scores this app's conversations now, without waiting for them to go quiet."""
     app = owned_app(db, user, app_id)
     if not has_key(db, user.id, JEV_PROVIDER):

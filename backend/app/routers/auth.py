@@ -21,6 +21,7 @@ class LoginRequest(BaseModel):
 
 class UserOut(BaseModel):
     email: str
+    name: str = ""
     is_admin: bool
 
 
@@ -46,7 +47,7 @@ def login(body: LoginRequest, request: Request, response: Response, db: DbSessio
         secure=settings.cookie_secure,
         samesite="lax",
     )
-    return UserOut(email=user.email, is_admin=user.is_admin)
+    return UserOut(email=user.email, name=user.name, is_admin=user.is_admin)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -59,4 +60,4 @@ def logout(request: Request, response: Response, db: DbSession) -> None:
 
 @router.get("/me")
 def me(user: CurrentUser) -> UserOut:
-    return UserOut(email=user.email, is_admin=user.is_admin)
+    return UserOut(email=user.email, name=user.name, is_admin=user.is_admin)

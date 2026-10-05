@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     embedding_model: str = "embeddinggemma"
 
     session_days: int = 7
+    # The address people reach Chat Builder at, e.g. https://chat.example.com.
+    # Used for invite links and embed snippets; defaults to the request's address.
+    public_url: str = ""
     # Set to true once the app is served over HTTPS.
     cookie_secure: bool = False
 

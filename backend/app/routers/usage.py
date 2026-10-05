@@ -5,7 +5,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from sqlalchemy import Date, cast, func, select
 
-from app.deps import CurrentUser, DbSession
+from app.deps import AdminUser, DbSession
 from app.pricing import cost, load_custom, price_for
 from app.pricing import key as price_key
 from app.models import ChatApp, Conversation, Message, UsageEvent
@@ -70,11 +70,11 @@ class UsageReport(BaseModel):
 
 
 @router.get("")
-def usage_report(db: DbSession, user: CurrentUser, days: int = Query(30, ge=1, le=365)) -> UsageReport:
+def usage_report(db: DbSession, user: AdminUser, days: int = Query(30, ge=1, le=365)) -> UsageReport:
     now = datetime.now(UTC)
     since = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    apps = {a.id: a for a in db.scalars(select(ChatApp).where(ChatApp.owner_id == user.id))}
+    apps = {a.id: a for a in db.scalars(select(ChatApp))}
     app_ids = list(apps)
     events = select(UsageEvent).where(UsageEvent.app_id.in_(app_ids), UsageEvent.created_at >= since).subquery()
 

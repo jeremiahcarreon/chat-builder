@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, text
 
 from app.config import get_settings
-from app.deps import CurrentUser, DbSession
+from app.deps import AdminUser, DbSession
 from app.models import ServiceHeartbeat
 from app.version import __version__
 
@@ -70,5 +70,5 @@ async def _embedding_status() -> ServiceStatus:
 
 
 @router.get("/system/status")
-async def system_status(db: DbSession, _: CurrentUser) -> list[ServiceStatus]:
+async def system_status(db: DbSession, _: AdminUser) -> list[ServiceStatus]:
     return [_database_status(db), _worker_status(db), await _embedding_status()]

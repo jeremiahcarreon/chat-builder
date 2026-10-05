@@ -15,7 +15,7 @@ from sqlalchemy import delete, select
 from app.config import get_settings
 from app.deps import DbSession
 from app.llm.engine import ChatAccessError, ChatRequest, run_chat
-from app.models import ChatApp, Conversation, Message, User
+from app.models import AppAccess, ChatApp, Conversation, Message, User
 from app.security import SESSION_COOKIE, user_for_token
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -26,27 +26,37 @@ VISITOR_COOKIE = "cb_visitor"
 @dataclass
 class Access:
     app: ChatApp
+    # A signed-in person (admin, member with access, or an embedding site's user).
     user: User | None
+    # An anonymous visitor of a public app.
     visitor_id: str | None
     new_visitor: bool = False
 
     @property
-    def is_owner(self) -> bool:
-        return self.user is not None and self.app.owner_id == self.user.id
+    def is_admin(self) -> bool:
+        return self.user is not None and self.user.is_admin
 
     def conversation_filter(self):
-        if self.is_owner:
+        if self.user is not None:
             return Conversation.user_id == self.user.id
         return Conversation.visitor_id == self.visitor_id
 
 
+def can_use(db, user: User, app: ChatApp) -> bool:
+    if user.blocked:
+        return False
+    if user.is_admin:
+        return True
+    return db.get(AppAccess, (app.id, user.id)) is not None
+
+
 def resolve_access(db: DbSession, request: Request, app_id: uuid.UUID) -> Access:
     app = db.get(ChatApp, app_id)
-    token = request.cookies.get(SESSION_COOKIE)
-    user = user_for_token(db, token) if token else None
     if app is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Chat app not found")
-    if user is not None and app.owner_id == user.id:
+    token = request.cookies.get(SESSION_COOKIE)
+    user = user_for_token(db, token) if token else None
+    if user is not None and can_use(db, user, app):
         return Access(app, user, None)
     if not app.is_public:
         # Same response as a missing app, so private apps can't be discovered.
@@ -114,7 +124,7 @@ def app_info(app_id: uuid.UUID, request: Request, response: Response, db: DbSess
         name=app.name,
         description=app.description,
         welcome_message=app.welcome_message,
-        is_owner=access.is_owner,
+        is_owner=access.is_admin,
     )
 
 
@@ -189,7 +199,7 @@ async def send_message(app_id: uuid.UUID, body: SendMessage, request: Request, d
         app_id=app_id,
         message=body.message.strip(),
         conversation_id=body.conversation_id,
-        user_id=access.user.id if access.is_owner else None,
+        user_id=access.user.id if access.user else None,
         visitor_id=access.visitor_id,
     )
     db.close()

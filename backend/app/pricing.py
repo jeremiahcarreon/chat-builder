@@ -10,6 +10,7 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.models import UserSetting
+from app.workspace import workspace_owner_id
 
 PRICES_KEY = "model_prices"
 
@@ -33,16 +34,16 @@ BUILTIN: dict[tuple[str, str], tuple[float, float]] = {
 
 
 def load_custom(db: Session, user_id: uuid.UUID) -> dict[str, tuple[float, float]]:
-    row = db.get(UserSetting, (user_id, PRICES_KEY))
+    row = db.get(UserSetting, (workspace_owner_id(db), PRICES_KEY))
     if row is None:
         return {}
     return {key: (float(v["input"]), float(v["output"])) for key, v in row.value.items()}
 
 
 def save_custom(db: Session, user_id: uuid.UUID, prices: dict[str, tuple[float, float]]) -> None:
-    row = db.get(UserSetting, (user_id, PRICES_KEY))
+    row = db.get(UserSetting, (workspace_owner_id(db), PRICES_KEY))
     if row is None:
-        row = UserSetting(user_id=user_id, key=PRICES_KEY, value={})
+        row = UserSetting(user_id=workspace_owner_id(db), key=PRICES_KEY, value={})
         db.add(row)
     row.value = {key: {"input": i, "output": o} for key, (i, o) in prices.items()}
     db.commit()

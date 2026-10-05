@@ -28,7 +28,35 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export interface User {
   email: string;
+  name: string;
   is_admin: boolean;
+}
+
+export interface Person {
+  id: string;
+  email: string;
+  name: string;
+  username: string | null;
+  is_admin: boolean;
+  source: "local" | "embed";
+  blocked: boolean;
+  has_password: boolean;
+  invite_pending: boolean;
+  app_ids: string[];
+  last_seen_at: string | null;
+  created_at: string;
+}
+
+export interface InviteLink {
+  user: Person;
+  link: string;
+  expires_at: string;
+}
+
+export interface MyApp {
+  id: string;
+  name: string;
+  description: string;
 }
 
 export interface ProviderKey {

@@ -13,9 +13,18 @@ DbSession = Annotated[Session, Depends(get_db)]
 def current_user(request: Request, db: DbSession) -> User:
     token = request.cookies.get(SESSION_COOKIE)
     user = user_for_token(db, token) if token else None
-    if user is None:
+    if user is None or user.blocked:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not logged in")
     return user
 
 
 CurrentUser = Annotated[User, Depends(current_user)]
+
+
+def admin_user(user: CurrentUser) -> User:
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins can do this")
+    return user
+
+
+AdminUser = Annotated[User, Depends(admin_user)]

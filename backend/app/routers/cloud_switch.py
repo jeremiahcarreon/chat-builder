@@ -2,9 +2,9 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from app.deps import CurrentUser, DbSession
+from app.deps import AdminUser, DbSession
 from app.models import ChatApp, ProviderKey
-from app.providers import PROVIDERS
+from app.providers import PROVIDERS, workspace_key
 from app.routing import CLOUD_PROVIDERS, LOCAL_PROVIDER, CloudSwitch, load_cloud_switch, save_cloud_switch
 
 router = APIRouter(prefix="/api/settings/cloud-switch", tags=["settings"])
@@ -22,10 +22,9 @@ class CloudSwitchOut(CloudSwitchIn):
     local_app_count: int
 
 
-def _out(db: DbSession, user: CurrentUser, switch: CloudSwitch) -> CloudSwitchOut:
+def _out(db: DbSession, user: AdminUser, switch: CloudSwitch) -> CloudSwitchOut:
     local = db.scalar(
         select(func.count()).select_from(ChatApp).where(
-            ChatApp.owner_id == user.id,
             (ChatApp.provider == LOCAL_PROVIDER) | (ChatApp.classifier_provider == LOCAL_PROVIDER),
         )
     )
@@ -39,21 +38,19 @@ def _out(db: DbSession, user: CurrentUser, switch: CloudSwitch) -> CloudSwitchOu
 
 
 @router.get("")
-def get_switch(db: DbSession, user: CurrentUser) -> CloudSwitchOut:
+def get_switch(db: DbSession, user: AdminUser) -> CloudSwitchOut:
     return _out(db, user, load_cloud_switch(db, user.id))
 
 
 @router.put("")
-def update_switch(body: CloudSwitchIn, db: DbSession, user: CurrentUser) -> CloudSwitchOut:
+def update_switch(body: CloudSwitchIn, db: DbSession, user: AdminUser) -> CloudSwitchOut:
     if body.provider not in CLOUD_PROVIDERS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose Anthropic, OpenAI or Google Gemini.")
     chat_model = body.chat_model.strip()
     if body.enabled:
         if not chat_model:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose the cloud model that should answer.")
-        has_key = db.scalar(
-            select(ProviderKey.id).where(ProviderKey.user_id == user.id, ProviderKey.provider == body.provider)
-        )
+        has_key = workspace_key(db, body.provider)
         if not has_key:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,

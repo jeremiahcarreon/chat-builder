@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.deps import CurrentUser, DbSession
+from app.deps import AdminUser, DbSession
 from app.ingest import clear_index
 from app.models import ChatApp, DataSource
 from app.queue import queue
@@ -58,9 +58,9 @@ def source_out(source: DataSource, app_name: str | None = None) -> SourceOut:
     )
 
 
-def owned_source(db: DbSession, user: CurrentUser, source_id: uuid.UUID) -> DataSource:
+def owned_source(db: DbSession, user: AdminUser, source_id: uuid.UUID) -> DataSource:
     source = db.get(DataSource, source_id)
-    if source is None or db.get(ChatApp, source.app_id).owner_id != user.id:
+    if source is None or not user.is_admin:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Data source not found")
     return source
 
@@ -81,18 +81,18 @@ async def queue_ingest(source_id: uuid.UUID) -> None:
 
 
 @router.get("/sources")
-def list_all_sources(db: DbSession, user: CurrentUser) -> list[SourceOut]:
+def list_all_sources(db: DbSession, user: AdminUser) -> list[SourceOut]:
     rows = db.execute(
         select(DataSource, ChatApp.name)
         .join(ChatApp, ChatApp.id == DataSource.app_id)
-        .where(ChatApp.owner_id == user.id)
+        
         .order_by(ChatApp.name, DataSource.created_at)
     ).all()
     return [source_out(source, app_name) for source, app_name in rows]
 
 
 @router.get("/apps/{app_id}/sources")
-def list_sources(app_id: uuid.UUID, db: DbSession, user: CurrentUser) -> list[SourceOut]:
+def list_sources(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> list[SourceOut]:
     owned_app(db, user, app_id)
     rows = db.scalars(
         select(DataSource).where(DataSource.app_id == app_id).order_by(DataSource.created_at)
@@ -102,7 +102,7 @@ def list_sources(app_id: uuid.UUID, db: DbSession, user: CurrentUser) -> list[So
 
 @router.post("/apps/{app_id}/sources/upload", status_code=status.HTTP_201_CREATED)
 async def upload_files(
-    app_id: uuid.UUID, files: list[UploadFile], db: DbSession, user: CurrentUser
+    app_id: uuid.UUID, files: list[UploadFile], db: DbSession, user: AdminUser
 ) -> list[SourceOut]:
     owned_app(db, user, app_id)
     max_bytes = get_settings().max_upload_mb * 1024 * 1024
@@ -157,7 +157,7 @@ class RenameSource(BaseModel):
 
 
 @router.patch("/sources/{source_id}")
-def rename_source(source_id: uuid.UUID, body: RenameSource, db: DbSession, user: CurrentUser) -> SourceOut:
+def rename_source(source_id: uuid.UUID, body: RenameSource, db: DbSession, user: AdminUser) -> SourceOut:
     source = owned_source(db, user, source_id)
     source.name = body.name.strip()
     db.commit()
@@ -165,7 +165,7 @@ def rename_source(source_id: uuid.UUID, body: RenameSource, db: DbSession, user:
 
 
 @router.post("/sources/{source_id}/reprocess")
-async def reprocess_source(source_id: uuid.UUID, db: DbSession, user: CurrentUser) -> SourceOut:
+async def reprocess_source(source_id: uuid.UUID, db: DbSession, user: AdminUser) -> SourceOut:
     source = owned_source(db, user, source_id)
     source.status = "pending"
     source.error = None
@@ -175,7 +175,7 @@ async def reprocess_source(source_id: uuid.UUID, db: DbSession, user: CurrentUse
 
 
 @router.delete("/sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_source(source_id: uuid.UUID, db: DbSession, user: CurrentUser) -> None:
+def delete_source(source_id: uuid.UUID, db: DbSession, user: AdminUser) -> None:
     from app.connectors.spreadsheets import drop_sheet_tables
 
     source = owned_source(db, user, source_id)
@@ -249,14 +249,14 @@ async def _test(cs) -> TestResult:
 
 
 @router.post("/apps/{app_id}/sources/database/test")
-async def test_database(app_id: uuid.UUID, body: DatabaseIn, db: DbSession, user: CurrentUser) -> TestResult:
+async def test_database(app_id: uuid.UUID, body: DatabaseIn, db: DbSession, user: AdminUser) -> TestResult:
     owned_app(db, user, app_id)
     return await _test(body.connection_settings())
 
 
 @router.post("/sources/{source_id}/database/test")
 async def test_saved_database(
-    source_id: uuid.UUID, body: DatabaseIn, db: DbSession, user: CurrentUser
+    source_id: uuid.UUID, body: DatabaseIn, db: DbSession, user: AdminUser
 ) -> TestResult:
     """Tests edited settings, using the saved password if none was entered."""
     from app.connectors.databases import settings_for
@@ -267,7 +267,7 @@ async def test_saved_database(
 
 
 @router.post("/apps/{app_id}/sources/database", status_code=status.HTTP_201_CREATED)
-async def add_database(app_id: uuid.UUID, body: DatabaseIn, db: DbSession, user: CurrentUser) -> SourceOut:
+async def add_database(app_id: uuid.UUID, body: DatabaseIn, db: DbSession, user: AdminUser) -> SourceOut:
     from app.connectors.databases import secret_context
     from app.crypto import encrypt
 
@@ -285,7 +285,7 @@ async def add_database(app_id: uuid.UUID, body: DatabaseIn, db: DbSession, user:
 
 @router.put("/sources/{source_id}/database")
 async def update_database(
-    source_id: uuid.UUID, body: DatabaseIn, db: DbSession, user: CurrentUser
+    source_id: uuid.UUID, body: DatabaseIn, db: DbSession, user: AdminUser
 ) -> SourceOut:
     from app.connectors.databases import SERVER_KINDS, secret_context
     from app.crypto import encrypt

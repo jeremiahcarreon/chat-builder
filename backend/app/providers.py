@@ -88,18 +88,22 @@ def get_api_key(db: Session, user_id, provider: str) -> str:
     """Returns the decrypted key for a provider, or raises ProviderError."""
     if not PROVIDERS[provider].needs_key:
         return "ollama"
-    row = db.scalar(
-        select(ProviderKey).where(ProviderKey.user_id == user_id, ProviderKey.provider == provider)
-    )
+    # Keys are shared by the whole workspace; user_id is kept for callers' clarity.
+    row = workspace_key(db, provider)
     if row is None:
         raise ProviderError(f"No API key saved for {PROVIDERS[provider].label}. Add one in Settings.")
     return decrypt(row.encrypted_key, key_context(provider))
 
 
 def has_key(db: Session, user_id, provider: str) -> bool:
+    return workspace_key(db, provider) is not None
+
+
+def workspace_key(db: Session, provider: str) -> ProviderKey | None:
+    """The workspace's saved key for a provider (the most recently saved, if several)."""
     return db.scalar(
-        select(ProviderKey.id).where(ProviderKey.user_id == user_id, ProviderKey.provider == provider)
-    ) is not None
+        select(ProviderKey).where(ProviderKey.provider == provider).order_by(ProviderKey.updated_at.desc()).limit(1)
+    )
 
 
 def openai_compatible_client(provider: str, api_key: str) -> openai.AsyncOpenAI:

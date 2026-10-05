@@ -33,7 +33,7 @@ def verify_password(password_hash: str, password: str) -> bool:
 
 def authenticate(db: Session, email: str, password: str) -> User | None:
     user = db.scalar(select(User).where(User.email == email.lower()))
-    if user is None:
+    if user is None or user.password_hash is None or user.blocked:
         verify_password(_DUMMY_HASH, password)
         return None
     return user if verify_password(user.password_hash, password) else None
@@ -61,7 +61,15 @@ def user_for_token(db: Session, token: str) -> User | None:
     session = db.get(UserSession, _hash_token(token))
     if session is None or session.expires_at < datetime.now(UTC):
         return None
-    return db.get(User, session.user_id)
+    user = db.get(User, session.user_id)
+    if user is None or user.blocked:
+        return None
+    # Recorded at most once a minute, for the Users page.
+    now = datetime.now(UTC)
+    if user.last_seen_at is None or now - user.last_seen_at > timedelta(minutes=1):
+        user.last_seen_at = now
+        db.commit()
+    return user
 
 
 def end_session(db: Session, token: str) -> None:

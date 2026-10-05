@@ -1,4 +1,4 @@
-import { Database, LogOut, MessagesSquare, BarChart3, Settings } from "lucide-react";
+import { BarChart3, Database, LogOut, MessagesSquare, Settings, Users } from "lucide-react";
 import { NavLink, Outlet } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { api, type UpdateStatus } from "../api";
@@ -9,6 +9,7 @@ const nav = [
   { to: "/apps", label: "Chat Apps", icon: MessagesSquare },
   { to: "/sources", label: "Data Sources", icon: Database },
   { to: "/usage", label: "Usage", icon: BarChart3 },
+  { to: "/people", label: "People", icon: Users },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

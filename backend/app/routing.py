@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models import ChatApp, UserSetting
 from app.providers import PROVIDERS
+from app.workspace import workspace_owner_id
 
 CLOUD_SWITCH_KEY = "cloud_switch"
 LOCAL_PROVIDER = "ollama"
@@ -32,7 +33,7 @@ class CloudSwitch:
 
 
 def load_cloud_switch(db: Session, user_id: uuid.UUID) -> CloudSwitch:
-    row = db.get(UserSetting, (user_id, CLOUD_SWITCH_KEY))
+    row = db.get(UserSetting, (workspace_owner_id(db), CLOUD_SWITCH_KEY))
     if row is None:
         return CloudSwitch()
     known = {k: v for k, v in row.value.items() if k in CloudSwitch.__dataclass_fields__}
@@ -40,9 +41,9 @@ def load_cloud_switch(db: Session, user_id: uuid.UUID) -> CloudSwitch:
 
 
 def save_cloud_switch(db: Session, user_id: uuid.UUID, switch: CloudSwitch) -> None:
-    row = db.get(UserSetting, (user_id, CLOUD_SWITCH_KEY))
+    row = db.get(UserSetting, (workspace_owner_id(db), CLOUD_SWITCH_KEY))
     if row is None:
-        row = UserSetting(user_id=user_id, key=CLOUD_SWITCH_KEY, value={})
+        row = UserSetting(user_id=workspace_owner_id(db), key=CLOUD_SWITCH_KEY, value={})
         db.add(row)
     row.value = asdict(switch)
     db.commit()
