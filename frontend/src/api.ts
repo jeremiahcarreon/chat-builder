@@ -33,6 +33,7 @@ export interface User {
 
 export interface ProviderKey {
   needs_key: boolean;
+  chat: boolean;
   default_model: string;
   default_classifier_model: string;
   provider: string;

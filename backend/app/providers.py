@@ -23,6 +23,8 @@ class Provider:
     label: str
     key_hint: str
     needs_key: bool = True
+    # False for classifier-only providers (TypeSafe's Jev answers typed questions, not chat).
+    chat: bool = True
     # Suggested defaults shown in the app editor.
     default_model: str = ""
     default_classifier_model: str = ""
@@ -56,8 +58,20 @@ PROVIDERS: dict[str, Provider] = {
             # Local models are whatever has been pulled into Ollama, so there is
             # no safe default; the app's own model is used for the classifier.
         ),
+        Provider(
+            "typesafe",
+            "TypeSafe (Jev)",
+            "sk-...",
+            chat=False,
+            default_classifier_model="jev-latest",
+        ),
     ]
 }
+
+# TypeSafe AI's System One model: a fast, inexpensive classifier. When the owner
+# has a key, it screens messages for every app without its own classifier choice.
+JEV_PROVIDER = "typesafe"
+CHAT_PROVIDERS = tuple(p.id for p in PROVIDERS.values() if p.chat)
 
 GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
@@ -82,6 +96,12 @@ def get_api_key(db: Session, user_id, provider: str) -> str:
     return decrypt(row.encrypted_key, key_context(provider))
 
 
+def has_key(db: Session, user_id, provider: str) -> bool:
+    return db.scalar(
+        select(ProviderKey.id).where(ProviderKey.user_id == user_id, ProviderKey.provider == provider)
+    ) is not None
+
+
 def openai_compatible_client(provider: str, api_key: str) -> openai.AsyncOpenAI:
     match provider:
         case "openai":
@@ -99,6 +119,17 @@ async def list_models(provider: str, api_key: str) -> list[str]:
         if provider == "anthropic":
             client = anthropic.AsyncAnthropic(api_key=api_key, timeout=15, max_retries=1)
             return [m.id async for m in client.models.list()]
+        if provider == JEV_PROVIDER:
+            from app.guardrails.jev import JevClient
+            from app.llm.base import LLMError
+
+            client = JevClient(api_key)
+            try:
+                return await client.list_models()
+            except LLMError as exc:
+                raise ProviderError(str(exc)) from None
+            finally:
+                await client.aclose()
         if provider == "ollama":
             async with httpx.AsyncClient(timeout=10) as http:
                 response = await http.get(f"{get_settings().ollama_url}/api/tags")

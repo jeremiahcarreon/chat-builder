@@ -71,7 +71,9 @@ function ProviderKeyRow({ item }: { item: ProviderKey }) {
           <div>
             <div className="font-medium">{item.label}</div>
             <div className="text-sm text-slate-500">
-              {!item.needs_key
+              {!item.chat && !item.configured
+                ? "Classifier only. Once a key is saved, Jev screens messages for every app without its own classifier choice."
+                : !item.needs_key
                 ? localTest && !localTest.last_test_ok
                   ? `${localTest.last_test_error ?? "Not reachable"}`
                   : localTest

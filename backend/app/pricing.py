@@ -1,6 +1,6 @@
 """Model prices for cost estimates, in US dollars per million tokens.
 
-Claude prices come from Anthropic's published list; local models are free.
+Claude and Jev prices come from their published lists; local models are free.
 Owners can add or override prices for any model in Settings (OpenAI and
 Gemini prices change often, so none are built in).
 """
@@ -27,6 +27,8 @@ BUILTIN: dict[tuple[str, str], tuple[float, float]] = {
     ("anthropic", "claude-sonnet-5"): (2.0, 10.0),
     ("anthropic", "claude-sonnet-4-6"): (3.0, 15.0),
     ("anthropic", "claude-haiku-4-5"): (1.0, 5.0),
+    # TypeSafe AI's Jev: input tokens only; output is free.
+    ("typesafe", "jev"): (0.042, 0.0),
 }
 
 

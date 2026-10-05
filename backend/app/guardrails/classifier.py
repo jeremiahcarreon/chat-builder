@@ -6,6 +6,7 @@ import logging
 import re
 from dataclasses import dataclass
 
+from app.guardrails.jev import JevClient
 from app.llm.base import Completion, LLMClient
 from app.llm.sampling import CLASSIFIER_SAMPLING
 from app.models import ChatApp
@@ -188,12 +189,18 @@ def parse(
 
 
 async def classify(
-    client: LLMClient, model: str, app: ChatApp, source_names: list[str], history: list[tuple[str, str]], message: str
+    client: "LLMClient | JevClient", model: str, app: ChatApp, source_names: list[str], history: list[tuple[str, str]], message: str
 ) -> Classification:
     if PLEASANTRY.fullmatch(message):
         return Classification("allowed", 1.0, "Greeting or thanks")
     if excluded := excluded_match(app, message):
         return Classification("off_topic", 1.0, f"{EXCLUDED_REASON} {excluded}")
+    if isinstance(client, JevClient):
+        verdict, confidence, reason, usage = await client.classify(
+            model, app, topic_options(app, source_names), history, message,
+            has_manipulation_cues=bool(MANIPULATION_CUES.search(message)),
+        )
+        return Classification(verdict, confidence, reason, usage)
     completion = await client.complete(
         model=model,
         system=system_prompt(app, source_names),

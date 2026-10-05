@@ -25,6 +25,7 @@ class ProviderKeyOut(BaseModel):
     label: str
     key_hint: str
     needs_key: bool
+    chat: bool
     default_model: str
     default_classifier_model: str
     configured: bool
@@ -58,6 +59,7 @@ def _out(provider: str, row: ProviderKey | None) -> ProviderKeyOut:
         label=meta.label,
         key_hint=meta.key_hint,
         needs_key=meta.needs_key,
+        chat=meta.chat,
         default_model=meta.default_model,
         default_classifier_model=meta.default_classifier_model,
         configured=row is not None or not meta.needs_key,

@@ -44,6 +44,8 @@ class AppIn(BaseModel):
     def _known_provider(cls, value: str) -> str:
         if value not in PROVIDERS:
             raise ValueError(f"Unknown provider: {value}")
+        if not PROVIDERS[value].chat:
+            raise ValueError(f"{PROVIDERS[value].label} can only be used as the classifier")
         return value
 
     @field_validator("classifier_provider", "classifier_model")

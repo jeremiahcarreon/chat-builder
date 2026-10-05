@@ -179,12 +179,14 @@ function AppSettingsForm({ initial, appId }: { initial: ChatAppInput; appId?: st
                 if (next?.default_model) set("model", next.default_model);
               }}
             >
-              {providers?.map((p) => (
-                <option key={p.provider} value={p.provider}>
-                  {p.label}
-                  {p.configured ? "" : " (no key yet)"}
-                </option>
-              ))}
+              {providers
+                ?.filter((p) => p.chat)
+                .map((p) => (
+                  <option key={p.provider} value={p.provider}>
+                    {p.label}
+                    {p.configured ? "" : " (no key yet)"}
+                  </option>
+                ))}
             </Select>
           </Field>
           <Field
@@ -329,7 +331,11 @@ function GuardrailsCard({
   providers: ProviderKey[] | undefined;
 }) {
   const ownProvider = providers?.find((p) => p.provider === form.provider);
-  const classifierProvider = providers?.find((p) => p.provider === (form.classifier_provider ?? form.provider));
+  // With a TypeSafe key saved, apps without their own classifier choice use Jev.
+  const jevReady = !!providers?.find((p) => p.provider === "typesafe")?.configured;
+  const classifierProvider = providers?.find(
+    (p) => p.provider === (form.classifier_provider ?? (jevReady ? "typesafe" : form.provider)),
+  );
   const { data: models } = useQuery({
     queryKey: ["models", classifierProvider?.provider],
     queryFn: () => api<string[]>(`/api/settings/providers/${classifierProvider?.provider}/models`),
@@ -362,7 +368,14 @@ function GuardrailsCard({
                   <option value="strict">Strict: only clearly in-scope questions</option>
                 </Select>
               </Field>
-              <Field label="Classifier provider" hint="Blank uses the app's own provider.">
+              <Field
+                label="Classifier provider"
+                hint={
+                  jevReady
+                    ? "Jev, TypeSafe's System One model, is fast and costs a fraction of a cent per thousand checks."
+                    : "Add a TypeSafe key in Settings to use Jev, a fast System One classifier."
+                }
+              >
                 <Select
                   value={form.classifier_provider ?? ""}
                   onChange={(e) => {
@@ -370,7 +383,9 @@ function GuardrailsCard({
                     set("classifier_model", null);
                   }}
                 >
-                  <option value="">Same as the app ({ownProvider?.label ?? form.provider})</option>
+                  <option value="">
+                    {jevReady ? "Default: TypeSafe Jev" : `Same as the app (${ownProvider?.label ?? form.provider})`}
+                  </option>
                   {providers?.map((p) => (
                     <option key={p.provider} value={p.provider}>
                       {p.label}

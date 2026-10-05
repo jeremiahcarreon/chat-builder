@@ -10,14 +10,15 @@ from sqlalchemy import func, select
 
 from app.db import SessionLocal
 from app.guardrails.classifier import EXCLUDED_REASON, ClassifierError, classify
+from app.guardrails.jev import JevClient
 from app.guardrails.limits import check_limits
 from app.llm.base import LLMError
 from app.llm.clients import client_for
 from app.llm.prompt import refusal_message
 from app.models import ChatApp, Chunk, DataSource, SchemaDoc, UsageEvent
-from app.providers import PROVIDERS, ProviderError
+from app.providers import JEV_PROVIDER, PROVIDERS, ProviderError, get_api_key, has_key
 from app.rag.embeddings import EmbeddingError, embed_query
-from app.routing import CloudSwitch, classifier_for, load_cloud_switch
+from app.routing import classifier_for, load_cloud_switch
 
 log = logging.getLogger(__name__)
 
@@ -54,9 +55,21 @@ MAX_DATA_LINES = 20
 MAX_COLUMNS_LISTED = 12
 
 
-def _cloud_switch(owner_id: uuid.UUID) -> CloudSwitch:
+def effective_classifier(db, app: ChatApp) -> tuple[str, str]:
+    """The (provider, model) that actually screens this app's messages.
+
+    An explicit choice in the app wins. Otherwise Jev is used whenever the owner
+    has a TypeSafe key, and failing that the app's own provider (moved to the
+    cloud when the cloud switch is on).
+    """
+    if app.classifier_provider is None and has_key(db, app.owner_id, JEV_PROVIDER):
+        return JEV_PROVIDER, PROVIDERS[JEV_PROVIDER].default_classifier_model
+    return classifier_for(app, classifier_choice(app), load_cloud_switch(db, app.owner_id))
+
+
+def _effective_classifier(app: ChatApp) -> tuple[str, str]:
     with SessionLocal() as db:
-        return load_cloud_switch(db, owner_id)
+        return effective_classifier(db, app)
 
 
 def _setup(app: ChatApp, provider: str):
@@ -87,7 +100,11 @@ def _setup(app: ChatApp, provider: str):
                 lines.append(f"document {name}" + (f": {first[:100]}" if first else ""))
             else:
                 lines.append(f"{name}: tables " + "; ".join(tables.get(source_id, [])[:5]))
-        return client_for(db, app.owner_id, provider), lines[:MAX_DATA_LINES]
+        if provider == JEV_PROVIDER:
+            client = JevClient(get_api_key(db, app.owner_id, provider))
+        else:
+            client = client_for(db, app.owner_id, provider)
+        return client, lines[:MAX_DATA_LINES]
 
 
 # Cosine distance at or below which a question counts as covered by the app's documents.
@@ -128,8 +145,7 @@ async def check_message(
         return Verdict(True)
 
     try:
-        switch = await asyncio.to_thread(_cloud_switch, app.owner_id)
-        provider, model = classifier_for(app, classifier_choice(app), switch)
+        provider, model = await asyncio.to_thread(_effective_classifier, app)
         client, source_names = await asyncio.to_thread(_setup, app, provider)
         result = await classify(client, model, app, source_names, history, message)
     except (ProviderError, LLMError, ClassifierError) as exc:

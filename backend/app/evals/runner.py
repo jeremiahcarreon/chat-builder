@@ -10,12 +10,13 @@ from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.evals.grading import grade
-from app.guardrails.pipeline import classifier_choice
+from app.guardrails.classifier import ClassifierError
+from app.guardrails.jev import JevClient
+from app.guardrails.pipeline import effective_classifier
 from app.llm.clients import client_for
 from app.llm.engine import answer_once
 from app.models import ChatApp, TestCase, TestResult, TestRun, UsageEvent
-from app.providers import ProviderError
-from app.routing import classifier_for, load_cloud_switch
+from app.providers import JEV_PROVIDER, ProviderError, get_api_key
 
 log = logging.getLogger(__name__)
 
@@ -39,13 +40,15 @@ def _load(run_id: uuid.UUID):
 
 
 def _judge_client(app: ChatApp):
-    """The judge uses the same small, fast model as the classifier."""
+    """The judge uses the same small, fast model as the classifier (Jev, when available)."""
     with SessionLocal() as db:
-        provider, model = classifier_for(app, classifier_choice(app), load_cloud_switch(db, app.owner_id))
         try:
+            provider, model = effective_classifier(db, app)
+            if provider == JEV_PROVIDER:
+                return JevClient(get_api_key(db, app.owner_id, provider)), provider, model
             return client_for(db, app.owner_id, provider), provider, model
-        except ProviderError:
-            return None, provider, model
+        except (ProviderError, ClassifierError):
+            return None, "", ""
 
 
 def _save_result(run_id: uuid.UUID, case_id: uuid.UUID, passed: bool, blocked: bool, answer: str,
