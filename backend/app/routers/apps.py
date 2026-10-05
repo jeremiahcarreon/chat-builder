@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 
 from app.deps import CurrentUser, DbSession
+from app.evals.versions import current_version
 from app.models import ChatApp, Conversation, DataSource
 from app.providers import PROVIDERS
 
@@ -115,6 +116,8 @@ def list_apps(db: DbSession, user: CurrentUser) -> list[AppOut]:
 def create_app(body: AppIn, db: DbSession, user: CurrentUser) -> AppOut:
     app = ChatApp(owner_id=user.id, **body.model_dump())
     db.add(app)
+    db.flush()
+    current_version(db, app)
     db.commit()
     return _out(app)
 
@@ -129,6 +132,8 @@ def update_app(app_id: uuid.UUID, body: AppIn, db: DbSession, user: CurrentUser)
     app = owned_app(db, user, app_id)
     for name, value in body.model_dump().items():
         setattr(app, name, value)
+    db.flush()
+    current_version(db, app)
     db.commit()
     return _out(app)
 

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import func, select
 
 from app.db import SessionLocal
-from app.guardrails.classifier import ClassifierError, classify
+from app.guardrails.classifier import EXCLUDED_REASON, ClassifierError, classify
 from app.guardrails.limits import check_limits
 from app.llm.base import LLMError
 from app.llm.clients import client_for
@@ -161,7 +161,8 @@ async def check_message(
         "classifier": f"{provider}/{model}",
         "question": message[:500],
     }
-    if result.verdict == "off_topic" and await _matches_documents(app, message):
+    excluded = result.reason.startswith(EXCLUDED_REASON)
+    if result.verdict == "off_topic" and not excluded and await _matches_documents(app, message):
         # A question the app's own documents closely match is in scope, whatever the
         # classifier thought (small models only see each document's opening line).
         meta.update(verdict="allowed", reason="Closely matches the app's documents")

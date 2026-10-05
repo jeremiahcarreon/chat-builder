@@ -4,7 +4,8 @@ import json
 import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
@@ -88,7 +89,14 @@ class MessageOut(BaseModel):
     content: str
     blocked: bool = False
     error: bool = False
+    rating: int | None = None
+    feedback: str | None = None
     created_at: datetime
+
+
+class FeedbackIn(BaseModel):
+    rating: Literal[1, -1]
+    feedback: str | None = Field(default=None, max_length=4_000)
 
 
 class SendMessage(BaseModel):
@@ -156,6 +164,8 @@ def conversation_messages(
             content=m.content,
             blocked=bool(m.meta.get("blocked")),
             error=bool(m.meta.get("error")) and m.meta.get("excluded", False),
+            rating=m.rating,
+            feedback=m.feedback,
             created_at=m.created_at,
         )
         for m in rows
@@ -198,3 +208,27 @@ async def send_message(app_id: uuid.UUID, body: SendMessage, request: Request, d
     )
     _remember_visitor(response, access)
     return response
+
+
+@router.post("/{app_id}/messages/{message_id}/feedback")
+def rate_answer(app_id: uuid.UUID, message_id: int, body: FeedbackIn, request: Request, db: DbSession) -> MessageOut:
+    """Thumbs up or down on an answer, with an optional comment."""
+    access = resolve_access(db, request, app_id)
+    message = db.get(Message, message_id)
+    if message is None or message.role != "assistant":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Message not found")
+    # Only the person who had the conversation can rate it.
+    _owned_conversation(db, access, message.conversation_id)
+    message.rating = body.rating
+    message.feedback = (body.feedback or "").strip() or None
+    message.rated_at = datetime.now(UTC)
+    db.commit()
+    return MessageOut(
+        id=message.id,
+        role=message.role,
+        content=message.content,
+        blocked=bool(message.meta.get("blocked")),
+        rating=message.rating,
+        feedback=message.feedback,
+        created_at=message.created_at,
+    )

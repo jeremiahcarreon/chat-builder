@@ -316,3 +316,39 @@ async def generate(
         gen.meta["error"] = "internal"
         await emit({"type": "error", "message": "Something went wrong while answering."})
     return gen
+
+
+@dataclass
+class OneOffAnswer:
+    text: str
+    blocked: bool
+    meta: dict
+    usage: list[UsageEvent]
+
+
+def _client_and_model(app: ChatApp) -> tuple[LLMClient, str, str]:
+    with SessionLocal() as db:
+        provider, model = chat_model_for(app, load_cloud_switch(db, app.owner_id))
+        return client_for(db, app.owner_id, provider), provider, model
+
+
+async def answer_once(app: ChatApp, question: str, usage_kind: str = "test") -> OneOffAnswer:
+    """Answers a single question exactly as live chat would, without saving a conversation.
+
+    Used by test runs. Rate limits are skipped; tokens are still recorded.
+    """
+    try:
+        client, provider, model = await asyncio.to_thread(_client_and_model, app)
+    except ProviderError as exc:
+        return OneOffAnswer(str(exc), False, {"error": str(exc)}, [])
+
+    verdict = await check_message(app, [], question, None, None, apply_limits=False)
+    if not verdict.allowed:
+        return OneOffAnswer(verdict.reply, True, {"blocked": verdict.meta}, verdict.usage)
+
+    async def ignore(_event: dict) -> None:
+        pass
+
+    gen = Generation(meta={"model": f"{provider}/{model}", "screened": verdict.meta})
+    await generate(app, client, provider, model, [], question, gen, ignore, usage_kind=usage_kind)
+    return OneOffAnswer(gen.text, False, gen.meta, verdict.usage + gen.usage)

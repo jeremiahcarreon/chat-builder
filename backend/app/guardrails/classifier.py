@@ -66,6 +66,44 @@ def topic_options(app: ChatApp, source_names: list[str]) -> list[str]:
     return [GREETING_TOPIC, *options]
 
 
+def excluded_options(app: ChatApp) -> list[str]:
+    """The owner's out-of-scope items, offered to the classifier as a numbered list."""
+    items = [part.strip(" -*.\t") for part in re.split(r"[,;\n]", app.out_of_scope)]
+    return [item for item in dict.fromkeys(items) if item]
+
+
+# Reason prefix for messages matching an out-of-scope item; the pipeline never
+# overrides these (for example with a close document match).
+EXCLUDED_REASON = "Out of scope:"
+
+# Catch-all items ("anything unrelated to HVAC") describe the scope's edge rather
+# than a topic; the classifier handles those, so they're skipped here.
+CATCH_ALL = re.compile(r"\b(anything|everything|unrelated|not related|other than|outside)\b", re.IGNORECASE)
+GENERIC_WORDS = {
+    "about", "advice", "and", "any", "asking", "for", "from", "help", "into", "other", "questions",
+    "question", "related", "requests", "request", "stuff", "that", "the", "things", "this", "topics",
+    "topic", "with", "writing",
+}
+STEM = 5
+
+
+def _stems(text: str) -> set[str]:
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    return {w[:STEM] for w in words if len(w) >= 4 and w not in GENERIC_WORDS}
+
+
+def excluded_match(app: ChatApp, message: str) -> str | None:
+    """The out-of-scope item a message is about, by shared word stems ("warranty" ~ "warranties")."""
+    message_stems = _stems(message)
+    for item in excluded_options(app):
+        if CATCH_ALL.search(item):
+            continue
+        item_stems = _stems(item)
+        if item_stems and item_stems & message_stems:
+            return item
+    return None
+
+
 def system_prompt(app: ChatApp, source_names: list[str]) -> str:
     lines = [
         f'You screen messages sent to a chat assistant called "{app.name}". You never answer the '
@@ -154,6 +192,8 @@ async def classify(
 ) -> Classification:
     if PLEASANTRY.fullmatch(message):
         return Classification("allowed", 1.0, "Greeting or thanks")
+    if excluded := excluded_match(app, message):
+        return Classification("off_topic", 1.0, f"{EXCLUDED_REASON} {excluded}")
     completion = await client.complete(
         model=model,
         system=system_prompt(app, source_names),

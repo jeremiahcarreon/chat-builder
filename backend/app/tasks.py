@@ -18,3 +18,10 @@ async def ping() -> str:
 @queue.task(name="ingest_source", queue="ingest")
 async def ingest_source_task(source_id: str) -> None:
     await ingest_source(uuid.UUID(source_id))
+
+
+@queue.task(name="run_tests", queue="tests")
+async def run_tests_task(run_id: str) -> None:
+    from app.evals.runner import run_tests
+
+    await run_tests(uuid.UUID(run_id))
