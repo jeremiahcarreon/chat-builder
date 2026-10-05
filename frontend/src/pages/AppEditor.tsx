@@ -6,6 +6,7 @@ import { api, type ChatApp, type ChatAppInput, type CloudSwitch, type ProviderKe
 import { ChatPanel } from "../components/ChatPanel";
 import { Button, Card, Field, Input, Select, Tabs, Textarea, Toggle } from "../components/ui";
 import { DataSourcesTab } from "./DataSourcesTab";
+import { DeployTab } from "./DeployTab";
 import { QualityTab } from "./QualityTab";
 
 const blank: ChatAppInput = {
@@ -32,7 +33,7 @@ const blank: ChatAppInput = {
   seed: null,
 };
 
-type Tab = "settings" | "sources" | "chat" | "quality";
+type Tab = "settings" | "sources" | "chat" | "quality" | "deploy";
 
 export function AppEditor() {
   const { appId } = useParams();
@@ -78,6 +79,7 @@ export function AppEditor() {
           { id: "sources", label: "Data sources" },
           { id: "chat", label: "Try it" },
           { id: "quality", label: "Quality" },
+          { id: "deploy", label: "Deploy" },
         ]}
         active={tab}
         onChange={setTab}
@@ -86,6 +88,7 @@ export function AppEditor() {
       {tab === "sources" && <DataSourcesTab appId={app.id} />}
       {tab === "chat" && <ChatPanel appId={app.id} className="h-[70vh]" />}
       {tab === "quality" && <QualityTab appId={app.id} />}
+      {tab === "deploy" && <DeployTab appId={app.id} />}
     </div>
   );
 }

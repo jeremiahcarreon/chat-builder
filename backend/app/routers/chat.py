@@ -54,10 +54,21 @@ def resolve_access(db: DbSession, request: Request, app_id: uuid.UUID) -> Access
     app = db.get(ChatApp, app_id)
     if app is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Chat app not found")
+    # The embedded widget sends its session as a bearer token (third-party iframes
+    # can't rely on cookies); the dashboard and chat page use the login cookie.
+    authorization = request.headers.get("authorization", "")
+    if authorization.lower().startswith("bearer "):
+        user = user_for_token(db, authorization[7:].strip(), kind="embed", app_id=app.id)
+        if user is None or not can_use(db, user, app):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Your chat session has ended. Reload the page.")
+        return Access(app, user, None)
     token = request.cookies.get(SESSION_COOKIE)
     user = user_for_token(db, token) if token else None
     if user is not None and can_use(db, user, app):
         return Access(app, user, None)
+    embed_visitor = request.headers.get("x-visitor-id")
+    if embed_visitor and app.embed_enabled and app.embed_auth == "public" and len(embed_visitor) == 43:
+        return Access(app, None, embed_visitor)
     if not app.is_public:
         # Same response as a missing app, so private apps can't be discovered.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Chat app not found")

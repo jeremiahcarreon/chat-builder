@@ -7,11 +7,21 @@ export class ApiError extends Error {
   }
 }
 
+// Inside the embedded widget, requests carry the widget session (or anonymous
+// visitor id) as headers instead of relying on cookies.
+let widgetHeaders: Record<string, string> = {};
+
+export function setWidgetAuth(auth: { token?: string; visitorId?: string } | null) {
+  widgetHeaders = {};
+  if (auth?.token) widgetHeaders.Authorization = `Bearer ${auth.token}`;
+  if (auth?.visitorId) widgetHeaders["X-Visitor-Id"] = auth.visitorId;
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     ...init,
     credentials: "same-origin",
-    headers: { "Content-Type": "application/json", ...init.headers },
+    headers: { "Content-Type": "application/json", ...widgetHeaders, ...init.headers },
   });
   if (!response.ok) {
     let message = response.statusText;
@@ -155,7 +165,7 @@ export async function streamChat(
   const response = await fetch(`/api/chat/${appId}/messages`, {
     method: "POST",
     credentials: "same-origin",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...widgetHeaders },
     body: JSON.stringify(body),
     signal,
   });
@@ -385,4 +395,28 @@ export interface TranscriptMessage {
   rating: 1 | -1 | null;
   feedback: string | null;
   created_at: string;
+}
+
+export interface EmbedSettings {
+  enabled: boolean;
+  auth: "login" | "signed" | "public";
+  allowed_domains: string[];
+  color: string;
+}
+
+export interface EmbedInfo extends EmbedSettings {
+  app_id: string;
+  has_secret: boolean;
+  script_url: string;
+  snippet: string;
+  public_url_configured: boolean;
+}
+
+export interface WidgetConfig {
+  name: string;
+  description: string;
+  welcome_message: string;
+  color: string;
+  auth: "login" | "signed" | "public";
+  allowed_origins: string[];
 }

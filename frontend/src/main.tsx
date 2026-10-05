@@ -9,6 +9,7 @@ import { AppEditor } from "./pages/AppEditor";
 import { Apps } from "./pages/Apps";
 import { ChatPage } from "./pages/ChatPage";
 import { DataSources } from "./pages/DataSources";
+import { EmbedChat } from "./pages/EmbedChat";
 import { Invite } from "./pages/Invite";
 import { Login } from "./pages/Login";
 import { MemberHome } from "./pages/MemberHome";
@@ -25,6 +26,7 @@ function App() {
     <Routes>
       <Route path="/chat/:appId" element={<ChatPage />} />
       <Route path="/invite/:token" element={<Invite />} />
+      <Route path="/embed/app/:appId" element={<EmbedChat />} />
       <Route path="*" element={<Dashboard />} />
     </Routes>
   );

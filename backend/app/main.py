@@ -1,19 +1,22 @@
 import logging
+import re
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
+from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
 from app.db import SessionLocal
-from app.models import User
+from app.models import ChatApp, User
 from app.queue import queue
-from app.version import __version__
-from app.routers import apps, auth, chat, cloud_switch, prices, provider_keys, quality, sources, system, updates, usage, users
+from app.routers import apps, auth, chat, cloud_switch, embed, prices, provider_keys, quality, sources, system, updates, usage, users
 from app.security import hash_password
+from app.version import __version__
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +53,31 @@ app.include_router(updates.router)
 app.include_router(quality.router)
 app.include_router(prices.router)
 app.include_router(users.router)
+app.include_router(embed.router)
+
+EMBED_FRAME = re.compile(r"^/embed/app/([0-9a-fA-F-]{36})")
+
+
+@app.middleware("http")
+async def frame_policy(request: Request, call_next):
+    """Only the widget iframe may be embedded elsewhere, and only on the app's allowed domains."""
+    response = await call_next(request)
+    match = EMBED_FRAME.match(request.url.path)
+    if match:
+        def lookup():
+            with SessionLocal() as db:
+                try:
+                    return embed.frame_ancestors(db.get(ChatApp, uuid.UUID(match.group(1))))
+                except ValueError:
+                    return embed.frame_ancestors(None)
+
+        policy = await run_in_threadpool(lookup)
+    else:
+        policy = "frame-ancestors 'self'"
+    response.headers["Content-Security-Policy"] = policy
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    return response
 
 # Serve the built React app, with client-side routes falling back to index.html.
 _static = Path(get_settings().static_dir)

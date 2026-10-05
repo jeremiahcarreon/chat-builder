@@ -28,7 +28,8 @@ services:
   api:
     <<: *app
     ports:
-      - "${APP_PORT:-8080}:8000"
+      # APP_BIND=127.0.0.1 keeps the port private to this machine (behind a reverse proxy).
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-8080}:8000"
     depends_on:
       postgres:
         condition: service_healthy

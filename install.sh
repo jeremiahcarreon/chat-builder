@@ -7,6 +7,7 @@
 #   CB_HOME=/path        Install location (default: ~/chat-builder)
 #   CB_VERSION=x.y.z     Install a specific release (default: latest)
 #   CB_PORT=8080         Port for the web dashboard
+#   CB_PUBLIC_URL=...    Public address behind a reverse proxy, e.g. https://chat.example.com
 #   CB_ADMIN_EMAIL=...   Admin login email (prompted if not set)
 
 set -euo pipefail
@@ -101,6 +102,16 @@ else
   fi
   [ "${#password}" -ge 12 ] || die "The password must be at least 12 characters."
 
+  public_url="${CB_PUBLIC_URL:-}"
+  if [ -z "$public_url" ]; then
+    public_url="$(ask "Public address if it'll sit behind a reverse proxy, like https://chat.example.com (Enter to skip): ")"
+  fi
+  public_url="${public_url%/}"
+  # Behind a proxy: keep the port private to this machine, trust the proxy's
+  # client-address headers, and use secure cookies over https.
+  if [ -n "$public_url" ]; then bind=127.0.0.1; forwarded="*"; else bind=0.0.0.0; forwarded=127.0.0.1; fi
+  case "$public_url" in https://*) secure=true ;; *) secure=false ;; esac
+
   umask 077
   cat >"$ENV_FILE" <<EOF
 # Chat Builder settings. Back up this file: MASTER_KEY decrypts stored API keys
@@ -109,11 +120,14 @@ CB_VERSION=$CB_VERSION
 CB_REPO=$REPO
 CB_HOME=$CB_HOME
 APP_PORT=$PORT
+APP_BIND=$bind
+PUBLIC_URL=$public_url
+FORWARDED_ALLOW_IPS=$forwarded
 ADMIN_EMAIL=$email
 ADMIN_PASSWORD=$password
 POSTGRES_PASSWORD=$(random_hex 24)
 MASTER_KEY=$(random_b64 32)
-COOKIE_SECURE=false
+COOKIE_SECURE=$secure
 EOF
   umask 022
 fi
@@ -150,6 +164,8 @@ for _ in $(seq 1 60); do
   if curl -fs "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
     say ""
     say "Chat Builder is running: http://localhost:$PORT"
+    public="$(grep -E '^PUBLIC_URL=' "$ENV_FILE" | cut -d= -f2-)"
+    [ -n "$public" ] && say "Once your reverse proxy points $public at localhost:$PORT, use that address."
     say "Log in with: $(grep -E '^ADMIN_EMAIL=' "$ENV_FILE" | cut -d= -f2-)"
     [ -n "${generated:-}" ] && say "Generated password: $password  (keep it somewhere safe)"
     say ""

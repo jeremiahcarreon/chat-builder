@@ -83,6 +83,10 @@ class UserSession(Base):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # web: dashboard login cookie; embed: a widget session (chat only, never the dashboard).
+    kind: Mapped[str] = mapped_column(String(16), default="web", server_default="web", nullable=False)
+    # For embed sessions: the app the session was opened for.
+    app_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("chat_apps.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -143,6 +147,15 @@ class ChatApp(Base):
     messages_per_minute: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     daily_token_limit: Mapped[int] = mapped_column(Integer, default=200_000, nullable=False)
     is_public: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Embeddable widget (see app/routers/embed.py).
+    embed_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    # login: Chat Builder accounts; signed: identity signed by the embedding site; public: anonymous
+    embed_auth: Mapped[str] = mapped_column(String(16), default="signed", server_default="signed", nullable=False)
+    # Sites allowed to embed the widget, as origins like https://erp.example.com.
+    allowed_domains: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]", nullable=False)
+    # Encrypted secret the embedding site signs identity tokens with.
+    encrypted_embed_secret: Mapped[str | None] = mapped_column(Text)
+    widget_color: Mapped[str] = mapped_column(String(16), default="#0f172a", server_default="#0f172a", nullable=False)
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

@@ -32,4 +32,6 @@ RUN useradd --create-home --uid 1000 app \
 USER app
 
 EXPOSE 8000
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers"]
+# Behind a reverse proxy, set FORWARDED_ALLOW_IPS to the proxy's address (or "*" when the
+# port is only reachable from this machine) so the real client address is used.
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips \"${FORWARDED_ALLOW_IPS:-127.0.0.1}\""]

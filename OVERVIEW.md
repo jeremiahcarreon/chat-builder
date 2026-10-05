@@ -209,7 +209,37 @@ Tools for an app's owner to raise answer quality and keep it there
 
 ---
 
-## 7. Chat App Settings
+## 7. People and Access
+
+- **One workspace.** Admins manage every app, provider key and setting.
+  Members only chat with the apps they've been given.
+- **Invites** are one-time links (valid 7 days) the admin sends; the person
+  sets their own password. Password resets work the same way.
+- **Blocking** someone signs them out everywhere, including widget sessions.
+- Each person's conversations are private to them; admins can read any of
+  them from the Quality tab.
+
+## 8. Embeddable Widget
+
+One `<script>` tag adds a chat button to any allowed site. The chat opens in
+an iframe served by Chat Builder, so the host page's styles can't affect it
+and the host page can't read it. Browsers only allow the iframe on the app's
+allowed domains (Content-Security-Policy `frame-ancestors`), and the iframe
+only accepts sign-in messages from them.
+
+**Sign-in modes per app:**
+- **Signed:** the host site's server signs a JWT (HS256, at most 24 hours,
+  with `sub` = username, `email`, optional `name`, and `aud` = the app ID)
+  with the app's secret. Chat Builder verifies it, creates or updates the
+  person (the username is the stable identity), grants access to the app, and
+  opens a 12-hour widget session. Blocked people are refused.
+- **Login:** Chat Builder accounts, inside the widget.
+- **Public:** anonymous visitors.
+
+Widget sessions are bearer tokens of a separate kind: they work only for
+chatting with that one app, never for the dashboard (even for admins).
+
+## 9. Chat App Settings
 
 - **Basics:** name, description, welcome message
 - **Model:** provider and model
@@ -222,11 +252,12 @@ Tools for an app's owner to raise answer quality and keep it there
 
 ---
 
-## 8. Install, Updates and Releases
+## 10. Install, Updates and Releases
 
 - **Install:** `curl -fsSL .../install.sh | bash` checks for Docker, asks for
-  the admin login, generates secrets, installs the `chat-builder` command and
-  starts the stack from published images.
+  the admin login and (optionally) the public address behind a reverse proxy,
+  generates secrets, installs the `chat-builder` command and starts the stack
+  from published images.
 - **CLI:** `chat-builder start | stop | restart | status | logs | open |
   version | check | update | backup | uninstall`.
 - **Updates:** the updater checks GitHub releases every 30 minutes. The
@@ -244,14 +275,15 @@ Tools for an app's owner to raise answer quality and keep it there
 
 ---
 
-## 9. Data Model
+## 11. Data Model
 
 | Table                       | Holds                                                    |
 |-----------------------------|----------------------------------------------------------|
-| `users`, `sessions`         | Login accounts and active logins                         |
+| `users`, `sessions`         | People (admins, members, people from embedding sites) and their dashboard or widget sessions |
+| `app_access`                | Which apps each member can use                           |
 | `user_settings`             | Cloud switch and model prices                            |
 | `provider_keys`             | Encrypted API keys                                       |
-| `chat_apps`                 | Settings for each chat app                               |
+| `chat_apps`                 | Settings for each chat app, including embedding (mode, allowed sites, encrypted secret) |
 | `prompt_versions`           | Numbered snapshots of answer-shaping settings            |
 | `data_sources`              | Files and DB connections (encrypted credentials)         |
 | `chunks`                    | Text chunks with 768-dimension vectors                   |
@@ -266,7 +298,7 @@ tables are managed by Procrastinate.
 
 ---
 
-## 10. Folder Layout
+## 12. Folder Layout
 
 ```
 chat-builder/
@@ -298,7 +330,7 @@ chat-builder/
 
 ---
 
-## 11. Status
+## 13. Status
 
 All planned features are built: foundation, chat apps, documents (with OCR),
 spreadsheets, database connections, guardrails, usage and cost tracking,
@@ -308,8 +340,6 @@ automatic updates.
 Not yet done:
 - **First release:** the repository must be made public, and `v0.1.0`
   tagged, before installs and updates work for anyone else.
-- **Multiple users:** there's a single admin login; the data model is ready
-  for more users.
 
 **Hardware:** plan for about 4 GB of RAM for the stack, plus whatever local
 models need. EmbeddingGemma uses about 1–2 GB on CPU.

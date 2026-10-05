@@ -43,13 +43,15 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def create_session(db: Session, user: User) -> str:
+def create_session(db: Session, user: User, *, kind: str = "web", app_id=None, lifetime: timedelta | None = None) -> str:
     token = secrets.token_urlsafe(32)
     db.add(
         UserSession(
             token_hash=_hash_token(token),
             user_id=user.id,
-            expires_at=datetime.now(UTC) + timedelta(days=get_settings().session_days),
+            kind=kind,
+            app_id=app_id,
+            expires_at=datetime.now(UTC) + (lifetime or timedelta(days=get_settings().session_days)),
         )
     )
     db.execute(delete(UserSession).where(UserSession.expires_at < datetime.now(UTC)))
@@ -57,9 +59,12 @@ def create_session(db: Session, user: User) -> str:
     return token
 
 
-def user_for_token(db: Session, token: str) -> User | None:
+def user_for_token(db: Session, token: str, *, kind: str = "web", app_id=None) -> User | None:
+    """The signed-in person for a session token. Widget (embed) sessions only work for their app."""
     session = db.get(UserSession, _hash_token(token))
-    if session is None or session.expires_at < datetime.now(UTC):
+    if session is None or session.expires_at < datetime.now(UTC) or session.kind != kind:
+        return None
+    if kind == "embed" and session.app_id != app_id:
         return None
     user = db.get(User, session.user_id)
     if user is None or user.blocked:

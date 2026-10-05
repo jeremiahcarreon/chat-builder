@@ -5,7 +5,18 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamChat, type AppInfo, type ChatMessage, type ConversationSummary } from "../api";
 
-export function ChatPanel({ appId, className = "" }: { appId: string; className?: string }) {
+export function ChatPanel({
+  appId,
+  className = "",
+  compact = false,
+  newChatSignal = 0,
+}: {
+  appId: string;
+  className?: string;
+  // The widget: no conversation list; "new chat" comes from its header.
+  compact?: boolean;
+  newChatSignal?: number;
+}) {
   const queryClient = useQueryClient();
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -29,6 +40,11 @@ export function ChatPanel({ appId, className = "" }: { appId: string; className?
   }, [messages, status]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (newChatSignal) newConversation();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newChatSignal]);
 
   async function openConversation(id: string) {
     if (busy) return;
@@ -119,8 +135,8 @@ export function ChatPanel({ appId, className = "" }: { appId: string; className?
   }
 
   return (
-    <div className={`flex min-h-0 overflow-hidden rounded-lg border border-slate-200 bg-white ${className}`}>
-      <aside className="hidden w-56 shrink-0 flex-col border-r border-slate-200 bg-slate-50 md:flex">
+    <div className={`flex min-h-0 overflow-hidden bg-white ${compact ? "" : "rounded-lg border border-slate-200"} ${className}`}>
+      <aside className={`${compact ? "hidden" : "hidden md:flex"} w-56 shrink-0 flex-col border-r border-slate-200 bg-slate-50`}>
         <button
           onClick={newConversation}
           className="m-3 flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-100"

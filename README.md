@@ -48,6 +48,52 @@ it's ready.
 Back up `~/chat-builder/.env`. Its `MASTER_KEY` decrypts saved API keys and
 database passwords and can't be recovered if lost.
 
+## Behind a reverse proxy (Caddy)
+
+To serve Chat Builder at its own address on a host that already runs Caddy,
+give the installer the address (it keeps port 8080 private to the machine and
+turns on secure cookies), then add to your Caddyfile:
+
+```
+chat.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+Caddy obtains the HTTPS certificate automatically. For an existing install,
+set these in `~/chat-builder/.env` and run `chat-builder restart`:
+
+```
+PUBLIC_URL=https://chat.example.com
+APP_BIND=127.0.0.1
+FORWARDED_ALLOW_IPS=*
+COOKIE_SECURE=true
+```
+
+## People
+
+**People** (admins only) is where you invite people. An invite is a one-time
+link you send; they choose their own password. **Admins** manage every app,
+key and setting; **members** only chat with the apps you give them. People
+signed in by an embedding site are added automatically, and anyone can be
+blocked.
+
+## Embed the chat on another site
+
+In an app's **Deploy** tab, turn on embedding, list the sites allowed to show
+it, and copy the `<script>` tag into those sites' pages. A chat button appears
+in the bottom-right corner. People sign in one of three ways:
+
+- **Signed in by your site** (for internal tools): your site's server signs a
+  short-lived token (a JWT, HS256) naming the logged-in person, using the
+  app's secret key. No second login. The Deploy tab includes Laravel code.
+- **Chat Builder sign-in:** people sign in inside the widget with their
+  Chat Builder account.
+- **Public:** anonymous visitors.
+
+**Try it on a preview page** in the Deploy tab shows the widget without
+touching your site.
+
 ## Manage it
 
 ```bash
