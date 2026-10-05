@@ -212,6 +212,12 @@ class Conversation(Base):
     # Anonymous visitors of a public app are identified by a random cookie value.
     visitor_id: Mapped[str | None] = mapped_column(String(64), index=True)
     title: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    # Quality review after the conversation goes quiet (see app/evals/review.py).
+    satisfaction: Mapped[float | None] = mapped_column(Float)  # 0-100
+    resolved: Mapped[float | None] = mapped_column(Float)  # probability 0-1
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Message count when reviewed; a conversation that continues is reviewed again.
+    reviewed_messages: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

@@ -111,3 +111,31 @@ async def test_rejected_key_becomes_a_readable_error():
     client = JevClient("sk-bad", transport=httpx2.MockTransport(handler))
     with pytest.raises(LLMError, match="TypeSafe API key was rejected"):
         await classify(client, "jev-latest", _app(), [], [], "My AC is broken")
+
+
+async def test_conversation_review_scales_score_to_100():
+    captured: list = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        captured.append(body)
+        levels = body["questions"]["satisfaction"]["criteria"]
+        return httpx2.Response(200, json={
+            "model": "jev-1.13.0",
+            "usage": {"input_tokens": 600, "output_tokens": 0},
+            "answers": {
+                "satisfaction": {"type": "score", "score": 3.0, "confidence": 0.8,
+                                 "legend": {str(i): level for i, level in enumerate(levels)},
+                                 "probabilities": {str(i): (0.8 if i == 3 else 0.05) for i in range(len(levels))}},
+                "resolved": {"type": "noul", "noul": 0.9},
+            },
+        })
+
+    client = JevClient("sk-test", transport=httpx2.MockTransport(handler))
+    transcript = [{"role": "person", "text": "Which radiator fits?"}, {"role": "assistant", "text": "CC2423."}]
+    satisfaction, resolved, usage = await client.review_conversation("jev-latest", _app(), transcript)
+    # Level 3 of 0-4 is 75 on a 0-100 scale.
+    assert satisfaction == 75.0 and resolved == 0.9 and usage.input_tokens == 600
+    assert captured[0]["questions"]["satisfaction"]["type"] == "score"
+    assert len(captured[0]["questions"]["satisfaction"]["criteria"]) == 5
+    assert captured[0]["state"]["conversation"] == transcript

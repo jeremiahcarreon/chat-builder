@@ -14,8 +14,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, case, func, select
 
 from app.deps import CurrentUser, DbSession
+from app.evals.review import waiting_count
 from app.evals.versions import changes, current_version
 from app.models import ChatApp, Conversation, Message, PromptVersion, TestCase, TestResult, TestRun
+from app.providers import JEV_PROVIDER, has_key
 from app.queue import queue
 from app.routers.apps import owned_app
 
@@ -36,6 +38,8 @@ class VersionOut(BaseModel):
     not_helpful: int
     test_passed: int | None = None
     test_total: int | None = None
+    satisfaction: float | None = None
+    reviewed: int = 0
 
 
 class VersionDetail(VersionOut):
@@ -46,6 +50,20 @@ class VersionDetail(VersionOut):
 
 class VersionNote(BaseModel):
     note: str = Field(max_length=500)
+
+
+# The prompt version of each conversation's latest answer.
+_latest_answer = (
+    select(Message.conversation_id, func.max(Message.id).label("message_id"))
+    .where(Message.role == "assistant", Message.prompt_version_id.is_not(None))
+    .group_by(Message.conversation_id)
+    .subquery()
+)
+_conversation_version = (
+    select(_latest_answer.c.conversation_id, Message.prompt_version_id.label("version_id"))
+    .join(Message, Message.id == _latest_answer.c.message_id)
+    .subquery()
+)
 
 
 def _version_rows(db: DbSession, app: ChatApp) -> list[VersionOut]:
@@ -65,6 +83,15 @@ def _version_rows(db: DbSession, app: ChatApp) -> list[VersionOut]:
             )
             .where(Message.prompt_version_id.in_([v.id for v in versions]), Message.role == "assistant")
             .group_by(Message.prompt_version_id)
+        )
+    }
+    satisfaction = {
+        version_id: (avg, n)
+        for version_id, avg, n in db.execute(
+            select(_conversation_version.c.version_id, func.avg(Conversation.satisfaction), func.count())
+            .join(Conversation, Conversation.id == _conversation_version.c.conversation_id)
+            .where(Conversation.app_id == app.id, Conversation.satisfaction.is_not(None))
+            .group_by(_conversation_version.c.version_id)
         )
     }
     latest_run = {}
@@ -92,6 +119,8 @@ def _version_rows(db: DbSession, app: ChatApp) -> list[VersionOut]:
                 not_helpful=down,
                 test_passed=run.passed if run else None,
                 test_total=run.total if run else None,
+                satisfaction=round(satisfaction[version.id][0], 1) if version.id in satisfaction else None,
+                reviewed=satisfaction.get(version.id, (None, 0))[1],
             )
         )
         previous = version
@@ -449,3 +478,127 @@ def run_results(app_id: uuid.UUID, run_id: uuid.UUID, db: DbSession, user: Curre
     ]
     order = {"regressed": 0, "new": 1, "same": 2, "fixed": 3}
     return sorted(results, key=lambda r: (r.passed, order[r.change]))
+
+
+# ------------------------------------------------------------ satisfaction
+
+
+class ReviewSummary(BaseModel):
+    # False when the owner has no TypeSafe key (reviews need Jev).
+    available: bool
+    reviewed: int
+    waiting: int
+    average: float | None
+    resolved_rate: float | None
+
+
+class ReviewedConversation(BaseModel):
+    id: uuid.UUID
+    title: str
+    satisfaction: float
+    resolved: float | None
+    messages: int
+    version_number: int | None
+    reviewed_at: datetime
+    updated_at: datetime
+
+
+class TranscriptMessage(BaseModel):
+    role: str
+    content: str
+    blocked: bool
+    rating: int | None
+    feedback: str | None
+    created_at: datetime
+
+
+@router.get("/reviews")
+def review_summary(app_id: uuid.UUID, db: DbSession, user: CurrentUser) -> ReviewSummary:
+    app = owned_app(db, user, app_id)
+    avg, reviewed, resolved = db.execute(
+        select(func.avg(Conversation.satisfaction), func.count(), func.avg(Conversation.resolved))
+        .where(Conversation.app_id == app.id, Conversation.satisfaction.is_not(None))
+    ).one()
+    return ReviewSummary(
+        available=has_key(db, user.id, JEV_PROVIDER),
+        reviewed=reviewed,
+        waiting=waiting_count(db, app.id),
+        average=round(avg, 1) if avg is not None else None,
+        resolved_rate=round(resolved, 3) if resolved is not None else None,
+    )
+
+
+@router.get("/reviews/conversations")
+def reviewed_conversations(
+    app_id: uuid.UUID,
+    db: DbSession,
+    user: CurrentUser,
+    order: Literal["lowest", "highest", "recent"] = "lowest",
+    limit: int = Query(25, ge=1, le=200),
+) -> list[ReviewedConversation]:
+    app = owned_app(db, user, app_id)
+    counts = select(Message.conversation_id, func.count().label("n")).group_by(Message.conversation_id).subquery()
+    sort = {
+        "lowest": Conversation.satisfaction.asc(),
+        "highest": Conversation.satisfaction.desc(),
+        "recent": Conversation.reviewed_at.desc(),
+    }[order]
+    rows = db.execute(
+        select(Conversation, counts.c.n, PromptVersion.number)
+        .join(counts, counts.c.conversation_id == Conversation.id)
+        .outerjoin(_conversation_version, _conversation_version.c.conversation_id == Conversation.id)
+        .outerjoin(PromptVersion, PromptVersion.id == _conversation_version.c.version_id)
+        .where(Conversation.app_id == app.id, Conversation.satisfaction.is_not(None))
+        .order_by(sort)
+        .limit(limit)
+    ).all()
+    return [
+        ReviewedConversation(
+            id=c.id,
+            title=c.title,
+            satisfaction=c.satisfaction,
+            resolved=c.resolved,
+            messages=n,
+            version_number=number,
+            reviewed_at=c.reviewed_at,
+            updated_at=c.updated_at,
+        )
+        for c, n, number in rows
+    ]
+
+
+@router.get("/reviews/conversations/{conversation_id}")
+def conversation_transcript(
+    app_id: uuid.UUID, conversation_id: uuid.UUID, db: DbSession, user: CurrentUser
+) -> list[TranscriptMessage]:
+    """The full conversation, for the app owner reviewing quality (including visitors' chats)."""
+    app = owned_app(db, user, app_id)
+    conversation = db.get(Conversation, conversation_id)
+    if conversation is None or conversation.app_id != app.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
+    rows = db.scalars(
+        select(Message)
+        .where(Message.conversation_id == conversation.id, Message.role.in_(("user", "assistant")))
+        .order_by(Message.id)
+    )
+    return [
+        TranscriptMessage(
+            role=m.role,
+            content=m.content,
+            blocked=bool(m.meta.get("blocked")),
+            rating=m.rating,
+            feedback=m.feedback,
+            created_at=m.created_at,
+        )
+        for m in rows
+    ]
+
+
+@router.post("/reviews/run", status_code=status.HTTP_202_ACCEPTED)
+async def review_now(app_id: uuid.UUID, db: DbSession, user: CurrentUser) -> dict:
+    """Scores this app's conversations now, without waiting for them to go quiet."""
+    app = owned_app(db, user, app_id)
+    if not has_key(db, user.id, JEV_PROVIDER):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Satisfaction reviews use Jev. Add a TypeSafe key in Settings.")
+    await queue.configure_task("review_app_now", queue="tests").defer_async(app_id=str(app.id))
+    return {"queued": True}

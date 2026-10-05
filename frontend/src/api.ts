@@ -259,6 +259,8 @@ export interface PromptVersionSummary {
   not_helpful: number;
   test_passed: number | null;
   test_total: number | null;
+  satisfaction: number | null;
+  reviewed: number;
 }
 
 export interface PromptVersionDetail extends PromptVersionSummary {
@@ -327,4 +329,32 @@ export interface ModelPrice {
   input: number | null;
   output: number | null;
   source: "builtin" | "custom" | "missing";
+}
+
+export interface ReviewSummary {
+  available: boolean;
+  reviewed: number;
+  waiting: number;
+  average: number | null;
+  resolved_rate: number | null;
+}
+
+export interface ReviewedConversation {
+  id: string;
+  title: string;
+  satisfaction: number;
+  resolved: number | null;
+  messages: number;
+  version_number: number | null;
+  reviewed_at: string;
+  updated_at: string;
+}
+
+export interface TranscriptMessage {
+  role: "user" | "assistant";
+  content: string;
+  blocked: boolean;
+  rating: 1 | -1 | null;
+  feedback: string | null;
+  created_at: string;
 }

@@ -5,6 +5,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   api,
+  type ReviewedConversation,
+  type ReviewSummary,
+  type TranscriptMessage,
   type PromptVersionDetail,
   type PromptVersionSummary,
   type RatedAnswer,
@@ -42,6 +45,7 @@ export function QualityTab({ appId }: { appId: string }) {
   const base = `/api/apps/${appId}/quality`;
   return (
     <div className="space-y-6">
+      <Satisfaction base={base} />
       <TestSet base={base} />
       <TestRuns base={base} />
       <Feedback base={base} />
@@ -390,6 +394,7 @@ function Versions({ base }: { base: string }) {
               <th className="py-1 font-medium">What changed</th>
               <th className="py-1 text-right font-medium">Answers</th>
               <th className="py-1 text-right font-medium">Helpful</th>
+              <th className="py-1 text-right font-medium">Satisfaction</th>
               <th className="py-1 text-right font-medium">Tests</th>
             </tr>
           </thead>
@@ -410,11 +415,14 @@ function Versions({ base }: { base: string }) {
                   <td className="py-2 text-right tabular-nums" title={`${v.helpful} helpful, ${v.not_helpful} not helpful`}>
                     {rated ? `${percent(v.helpful, rated)} of ${rated}` : "–"}
                   </td>
+                  <td className="py-2 text-right tabular-nums" title={`Average over ${v.reviewed} reviewed conversations`}>
+                    {v.satisfaction != null ? `${Math.round(v.satisfaction)} / 100` : "–"}
+                  </td>
                   <td className="py-2 text-right tabular-nums">{v.test_total != null ? `${v.test_passed}/${v.test_total}` : "–"}</td>
                 </tr>,
                 open === v.id && (
                   <tr key={`${v.id}-detail`}>
-                    <td colSpan={5} className="pb-3">
+                    <td colSpan={6} className="pb-3">
                       <VersionDetail base={base} id={v.id} />
                     </td>
                   </tr>
@@ -469,6 +477,150 @@ function VersionDetail({ base, id }: { base: string; id: number }) {
           ))}
         </dl>
       </details>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------ satisfaction
+
+function scoreStyle(score: number): string {
+  if (score < 35) return "bg-red-50 text-red-700";
+  if (score < 65) return "bg-amber-50 text-amber-800";
+  return "bg-emerald-50 text-emerald-700";
+}
+
+function Satisfaction({ base }: { base: string }) {
+  const queryClient = useQueryClient();
+  const [order, setOrder] = useState<"lowest" | "highest" | "recent">("lowest");
+  const [open, setOpen] = useState<string | null>(null);
+  const { data: summary } = useQuery({
+    queryKey: ["reviews", base],
+    queryFn: () => api<ReviewSummary>(`${base}/reviews`),
+    refetchInterval: (q) => (q.state.data && reviewing ? 3000 : false),
+  });
+  const { data: conversations } = useQuery({
+    queryKey: ["reviewed", base, order],
+    queryFn: () => api<ReviewedConversation[]>(`${base}/reviews/conversations?order=${order}`),
+    enabled: !!summary?.reviewed,
+  });
+  const [reviewing, setReviewing] = useState(false);
+  const run = useMutation({
+    mutationFn: () => api(`${base}/reviews/run`, { method: "POST" }),
+    onSuccess: () => {
+      setReviewing(true);
+      // Reviews take well under a second each; refresh shortly after.
+      setTimeout(() => {
+        setReviewing(false);
+        queryClient.invalidateQueries({ queryKey: ["reviews", base] });
+        queryClient.invalidateQueries({ queryKey: ["reviewed", base] });
+        queryClient.invalidateQueries({ queryKey: ["versions", base] });
+      }, 6000);
+    },
+  });
+
+  if (summary && !summary.available) {
+    return (
+      <Card title="Conversation satisfaction">
+        <p className="text-sm text-slate-500">
+          Jev, TypeSafe's System One model, can score how satisfied people seemed in each conversation. Add a TypeSafe
+          key in Settings to turn this on.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card
+      title="Conversation satisfaction"
+      description="Jev reviews each conversation after 30 quiet minutes and scores how satisfied the person seemed (0 to 100) and whether they got what they needed. Refused misuse attempts aren't scored."
+    >
+      <div className="mb-4 flex flex-wrap items-end gap-6">
+        <div>
+          <div className="text-sm text-slate-500">Average</div>
+          <div className="text-3xl font-semibold tabular-nums">
+            {summary?.average != null ? Math.round(summary.average) : "–"}
+            <span className="text-base font-normal text-slate-500"> / 100</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-sm text-slate-500">Needs met</div>
+          <div className="text-3xl font-semibold tabular-nums">
+            {summary?.resolved_rate != null ? `${Math.round(summary.resolved_rate * 100)}%` : "–"}
+          </div>
+        </div>
+        <div className="text-sm text-slate-500">
+          {summary?.reviewed ?? 0} reviewed · {summary?.waiting ?? 0} not yet reviewed
+        </div>
+        <Button variant="secondary" className="ml-auto" onClick={() => run.mutate()} disabled={run.isPending || reviewing}>
+          {reviewing ? <Loader2 size={14} className="animate-spin" /> : null}
+          {reviewing ? "Reviewing..." : "Review now"}
+        </Button>
+      </div>
+      {run.error && <p className="mb-3 text-sm text-red-600">{run.error.message}</p>}
+
+      {!!conversations?.length && (
+        <>
+          <div className="mb-2 inline-flex rounded-md border border-slate-300 bg-white p-0.5 text-sm" role="group">
+            {(
+              [
+                ["lowest", "Least satisfied"],
+                ["highest", "Most satisfied"],
+                ["recent", "Recently reviewed"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                onClick={() => setOrder(value)}
+                aria-pressed={order === value}
+                className={`rounded px-3 py-1 ${order === value ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <ul className="divide-y divide-slate-200">
+            {conversations.map((c) => (
+              <li key={c.id} className="py-2">
+                <button onClick={() => setOpen(open === c.id ? null : c.id)} className="flex w-full items-center gap-3 text-left text-sm">
+                  {open === c.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  <span className={`w-16 shrink-0 rounded-full px-2 py-0.5 text-center text-xs font-medium tabular-nums ${scoreStyle(c.satisfaction)}`}>
+                    {Math.round(c.satisfaction)}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{c.title || "Untitled"}</span>
+                  <span className="shrink-0 text-xs text-slate-500">
+                    {c.resolved != null && `${c.resolved >= 0.5 ? "needs met" : "needs not met"} · `}
+                    {c.messages} messages{c.version_number ? ` · v${c.version_number}` : ""}
+                  </span>
+                </button>
+                {open === c.id && <Transcript base={base} id={c.id} />}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </Card>
+  );
+}
+
+function Transcript({ base, id }: { base: string; id: string }) {
+  const { data } = useQuery({ queryKey: ["transcript", id], queryFn: () => api<TranscriptMessage[]>(`${base}/reviews/conversations/${id}`) });
+  if (!data) return <p className="py-2 pl-7 text-sm text-slate-500">Loading...</p>;
+  return (
+    <div className="mt-2 space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3 pl-7 text-sm">
+      {data.map((m, i) => (
+        <div key={i}>
+          <div className="text-xs font-medium text-slate-500">{m.role === "user" ? "Person" : m.blocked ? "Assistant (refused)" : "Assistant"}</div>
+          <div className="prose-chat">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+          </div>
+          {m.rating != null && (
+            <div className="mt-0.5 text-xs text-slate-500">
+              Rated {m.rating === 1 ? "helpful" : "not helpful"}
+              {m.feedback ? `: “${m.feedback}”` : ""}
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

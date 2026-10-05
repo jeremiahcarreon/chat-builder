@@ -9,17 +9,19 @@ See [OVERVIEW.md](OVERVIEW.md) for the design.
 - **Any model:** Claude, OpenAI, Gemini, or free local models through Ollama,
   chosen per app, with one switch to move local apps to the cloud.
 - **Scoped and protected:** each app has a personality, topics it covers and
-  refuses, a classifier that screens every question first, and rate and
-  daily usage limits.
-- **Measured:** thumbs up/down feedback, versioned prompts, and test sets
-  that catch regressions when you change a prompt or model.
+  refuses, a classifier that screens every question first (TypeSafe's Jev
+  when you add a key), and rate and daily usage limits.
+- **Measured:** thumbs up/down feedback, versioned prompts, test sets that
+  catch regressions when you change a prompt or model, and an automatic
+  satisfaction score for every conversation.
 - **Low maintenance:** one-line install; updates itself within a day of each
   release.
 
 ## First steps
 
 1. **Settings:** add an API key for Claude, OpenAI or Gemini, or use a local
-   Ollama model (no key). Check that System status is all green.
+   Ollama model (no key). Add a TypeSafe key to use Jev as the classifier and
+   for satisfaction reviews. Check that System status is all green.
 2. **Chat Apps → New app:** name, description, model, personality, what's in
    and out of scope, and the refusal message.
 3. **Data sources:** upload files or connect a database.

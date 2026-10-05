@@ -80,6 +80,7 @@ update status. There's no Redis: Postgres also runs the job queue.
 | Embeddings       | Ollama + EmbeddingGemma                 | Free, local, runs on CPU                        |
 | Job queue        | Procrastinate                           | Background jobs stored in Postgres              |
 | PDF and Word     | pypdf + python-docx                     | Text and table extraction                       |
+| Classifier, reviews | TypeSafe AI's Jev (`typesafe-sdk`)   | A "System One" model: typed decisions (choice, yes/no probability, score) in one fast pass, at $0.042 per million input tokens |
 | OCR              | RapidOCR (ONNX Runtime) + pypdfium2     | Scanned PDFs and images; CPU-only, no system packages, models bundled in the image |
 | Excel and CSV    | pandas + openpyxl                       | Sheets become queryable tables                  |
 | SQL Server       | pymssql (bundles FreeTDS)               | No system drivers; supports encrypted connections |
@@ -146,6 +147,17 @@ update status. There's no Redis: Postgres also runs the job queue.
 A fast, inexpensive model that checks every incoming question before the
 main ("System 2") model sees it.
 
+**Which model:** Jev, TypeSafe AI's System One model, whenever the owner has a
+TypeSafe key and the app hasn't chosen its own classifier; otherwise a small
+model from the app's provider (or the app's local model). Jev answers with a
+choice question (which topic, or "none") and a yes/no probability
+(manipulation attempt); strictness sets how sure it must be before blocking.
+
+Measured on 33 labeled messages across three apps, including a real catalog
+app whose scope is written as a paragraph: Jev 33/33, the local 3B model 29/33
+(it blocked four legitimate catalog questions). Jev's median latency was
+119 ms, at about $0.00003 per message.
+
 **How it decides:**
 - Greetings and thanks are allowed without a model call.
 - A message mentioning one of the owner's out-of-scope items is blocked
@@ -165,8 +177,6 @@ main ("System 2") model sees it.
 whether to let messages through or block them if the classifier is down.
 Off-topic and misuse get the same reply, so probing reveals nothing.
 
-Measured on a 3B local model (two apps, 8 messages each, run twice): 16/16
-correct on both.
 
 ---
 
@@ -188,7 +198,14 @@ Tools for an app's owner to raise answer quality and keep it there
   checked by a judge model at temperature 0.
 - **Test runs:** run in the background through the same path as live chat,
   against the current version. Each result is compared with the previous
-  run and marked regressed, fixed, new or unchanged.
+  run and marked regressed, fixed, new or unchanged. With Jev, the reference
+  answer check is a Jev yes/no question.
+- **Satisfaction review:** after a conversation has been quiet for 30
+  minutes, Jev scores how satisfied the person seemed (0 to 100, from a
+  five-level scale) and how likely their need was met. Refused misuse
+  attempts aren't scored. The Quality tab shows the average, the least
+  satisfied conversations with full transcripts, and satisfaction per prompt
+  version; **Review now** scores conversations without waiting.
 
 ---
 
@@ -239,9 +256,9 @@ Tools for an app's owner to raise answer quality and keep it there
 | `data_sources`              | Files and DB connections (encrypted credentials)         |
 | `chunks`                    | Text chunks with 768-dimension vectors                   |
 | `schema_docs`               | Table and column descriptions with vectors               |
-| `conversations`, `messages` | Chat history, verdicts, prompt version, model, ratings and feedback |
+| `conversations`, `messages` | Chat history, verdicts, prompt version, model, ratings, feedback and satisfaction scores |
 | `test_cases`, `test_runs`, `test_results` | Test sets and their results            |
-| `usage_events`              | Tokens per model call (chat, classifier, test)           |
+| `usage_events`              | Tokens per model call (chat, classifier, test, review)   |
 | `service_heartbeats`        | Worker check-ins for the status panel                    |
 
 Spreadsheet data lives in the separate `sheets` schema; the job queue's
@@ -270,10 +287,10 @@ chat-builder/
 │   └── app/
 │       ├── routers/         # API endpoints
 │       ├── llm/             # chat engine, providers, prompt, sampling
-│       ├── guardrails/      # classifier, rate limits
+│       ├── guardrails/      # classifier (incl. Jev), rate limits
 │       ├── rag/             # parsing, OCR, chunking, embeddings, retrieval
 │       ├── connectors/      # spreadsheets, databases, SQL tool and safety
-│       ├── evals/           # prompt versions, grading, test runner
+│       ├── evals/           # prompt versions, grading, test runner, reviews
 │       ├── routing.py       # cloud switch
 │       └── pricing.py       # cost estimates
 └── frontend/src/            # React screens

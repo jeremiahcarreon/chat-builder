@@ -60,6 +60,20 @@ JUDGE_INSTRUCTIONS = (
 )
 
 
+SATISFACTION_INSTRUCTIONS = (
+    "How satisfied the person chatting seemed with the assistant's help, judged from their messages "
+    "(and any ratings they gave) across the whole conversation."
+)
+SATISFACTION_LEVELS = [
+    "Very dissatisfied: frustrated or annoyed, complained, or said the answers were wrong or useless",
+    "Dissatisfied: had to repeat or rephrase, corrected the assistant, or gave up",
+    "Neutral: no clear sign either way",
+    "Satisfied: got usable answers and moved on",
+    "Very satisfied: clearly got what they needed, thanked the assistant or confirmed it worked",
+]
+RESOLVED_INSTRUCTIONS = "By the end of the conversation, the person got what they came for."
+
+
 def _error(exc: ts.TypeSafeError) -> LLMError:
     if isinstance(exc, (ts.TypeSafeAuthenticationError, ts.TypeSafePermissionDeniedError)):
         return LLMError("The TypeSafe API key was rejected. Check it in Settings.")
@@ -143,6 +157,28 @@ class JevClient:
         usage = _usage(response)
         reason = f"Judge: {probability:.0%} likely to agree with the reference"
         return probability >= 0.5, reason, usage.input_tokens, usage.output_tokens
+
+    async def review_conversation(self, model: str, app: ChatApp, transcript: list[dict]) -> tuple[float, float, Completion]:
+        """How satisfied the person seemed (0-100) and how likely their need was resolved (0-1)."""
+        try:
+            response = await self.client.system_one(
+                state={
+                    "assistant": app.name,
+                    "purpose": app.description.strip() or app.in_scope.strip(),
+                    "conversation": transcript,
+                },
+                questions={
+                    "satisfaction": ts.Score(instructions=SATISFACTION_INSTRUCTIONS, criteria=SATISFACTION_LEVELS),
+                    "resolved": ts.Noul(instructions=RESOLVED_INSTRUCTIONS),
+                },
+                model=model,
+            )
+        except ts.TypeSafeError as exc:
+            raise _error(exc) from exc
+        score = response.scores["satisfaction"].score
+        # Jev's score is a position between the levels (0 to len-1); report it as 0-100.
+        satisfaction = round(100 * score / (len(SATISFACTION_LEVELS) - 1), 1)
+        return satisfaction, response.nouls["resolved"].noul, _usage(response)
 
     async def list_models(self) -> list[str]:
         try:
