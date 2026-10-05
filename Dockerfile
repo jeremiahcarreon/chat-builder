@@ -8,11 +8,13 @@ RUN npm run build
 
 # --- Stage 2: Python app (used by both the api and worker containers) ---
 FROM python:3.12-slim
+ARG APP_VERSION=0.0.0-dev
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
-    PATH="/app/.venv/bin:$PATH"
+    PATH="/app/.venv/bin:$PATH" \
+    APP_VERSION=$APP_VERSION
 COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /usr/local/bin/uv
 
 WORKDIR /app
@@ -25,7 +27,7 @@ COPY backend/ ./
 COPY --from=frontend /frontend/dist ./static
 
 RUN useradd --create-home --uid 1000 app \
-    && mkdir -p /data/uploads \
+    && mkdir -p /data/uploads /data/updates \
     && chown -R app:app /data
 USER app
 

@@ -3,25 +3,54 @@
 Self-hosted dashboard for building scoped, RAG-enabled chat apps.
 See [OVERVIEW.md](OVERVIEW.md) for the design.
 
-## Run it
+## Install
 
-Requires Docker with the Compose plugin.
+Requires Linux or macOS with Docker (the installer offers to install Docker on
+Linux). Run:
 
 ```bash
-cp .env.example .env
-# Fill in .env: ADMIN_EMAIL, ADMIN_PASSWORD, and generate the two secrets:
-openssl rand -hex 24      # -> POSTGRES_PASSWORD
-openssl rand -base64 32   # -> MASTER_KEY (back this up)
-
-docker compose up -d --build
+curl -fsSL https://raw.githubusercontent.com/jeremiahcarreon/chat-builder/main/install.sh | bash
 ```
 
-Open http://localhost:8080 and sign in with your admin email and password.
-On first start the worker downloads EmbeddingGemma (about 600 MB); the
-status panel on the Settings page shows when it's ready.
+It asks for an admin email and password, installs to `~/chat-builder`
+(override with `CB_HOME=/path`), starts everything, and prints the dashboard
+address (default http://localhost:8080). The first start downloads the
+EmbeddingGemma model (about 600 MB); **Settings → System status** shows when
+it's ready.
 
-Back up `MASTER_KEY`. Without it, saved API keys and database passwords
-can't be decrypted.
+Back up `~/chat-builder/.env`. Its `MASTER_KEY` decrypts saved API keys and
+database passwords and can't be recovered if lost.
+
+## Manage it
+
+```bash
+chat-builder status        # what's running
+chat-builder logs api      # follow a service's logs
+chat-builder stop | start | restart
+chat-builder version       # installed and latest versions
+chat-builder update        # install the latest release now
+chat-builder backup        # database backup to ~/chat-builder/backups
+chat-builder uninstall     # remove containers (keeps data; --purge deletes it)
+```
+
+`~/chat-builder/docker-compose.yml` is yours to customize (ports, volumes,
+bind mounts). Updates never change it.
+
+## Updates
+
+New releases install automatically. The updater checks GitHub every 30
+minutes; when a release is available the dashboard shows a banner with
+**Update now**, and otherwise it installs within 24 hours. Each update backs up
+the database first, and rolls back on its own if the new version doesn't start.
+See [RELEASING.md](RELEASING.md) for how releases are published and kept
+compatible.
+
+## Run from source with Docker
+
+```bash
+cp .env.example .env       # fill in the values (see comments)
+docker compose up -d --build
+```
 
 ## Develop without Docker
 

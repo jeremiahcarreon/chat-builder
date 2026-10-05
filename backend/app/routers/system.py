@@ -8,6 +8,7 @@ from sqlalchemy import select, text
 from app.config import get_settings
 from app.deps import CurrentUser, DbSession
 from app.models import ServiceHeartbeat
+from app.version import __version__
 
 router = APIRouter(prefix="/api", tags=["system"])
 
@@ -24,7 +25,7 @@ class ServiceStatus(BaseModel):
 def health(db: DbSession) -> dict[str, str]:
     """Unauthenticated liveness check used by Docker."""
     db.execute(text("SELECT 1"))
-    return {"status": "ok"}
+    return {"status": "ok", "version": __version__}
 
 
 def _database_status(db: DbSession) -> ServiceStatus:

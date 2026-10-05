@@ -219,3 +219,16 @@ export interface CloudSwitch {
   classifier_model: string;
   local_app_count: number;
 }
+
+export interface UpdateStatus {
+  current: string;
+  managed: boolean;
+  latest: string | null;
+  available: boolean;
+  status: string;
+  message: string;
+  checked_at: string | null;
+  auto_update_at: string | null;
+  release_url: string | null;
+  requested: boolean;
+}

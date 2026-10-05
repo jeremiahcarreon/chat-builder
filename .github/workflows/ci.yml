@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - run: uv run pytest -q
+
+  migrations:
+    # Migrations must apply cleanly and match the models exactly.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: chatbuilder
+          POSTGRES_PASSWORD: ci-password
+          POSTGRES_DB: chatbuilder
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U chatbuilder" --health-interval 5s --health-timeout 5s --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql+psycopg://chatbuilder:ci-password@localhost:5432/chatbuilder
+      MASTER_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      ADMIN_EMAIL: admin@example.com
+      ADMIN_PASSWORD: ci-password-123
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - run: uv run alembic upgrade head
+      - run: uv run alembic check
+      # Every migration must also be reversible to the previous release.
+      - run: uv run alembic downgrade -1 && uv run alembic upgrade head
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: shellcheck -S warning install.sh deploy/chat-builder scripts/*.sh
+
+  docker:
+    # Builds the real images and runs the full stack, as an install would.
+    needs: [backend, migrations, frontend, scripts]
+    runs-on: ubuntu-latest
+    env:
+      CB_HOME: ${{ github.workspace }}/.install
+      ADMIN_EMAIL: admin@example.com
+      ADMIN_PASSWORD: ci-password-123
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build images
+        run: |
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker build --build-arg APP_VERSION="$(cat VERSION)-ci" -t "$repo:ci" .
+          docker build -f updater/Dockerfile -t "$repo-updater:ci" .
+
+      - name: Find the previous release
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Previous release: ${tag:-none}"
+
+      - name: Prepare an install directory
+        run: |
+          mkdir -p "$CB_HOME"
+          cp deploy/docker-compose.yml "$CB_HOME/"
+          cat > "$CB_HOME/.env" <<EOF
+          CB_VERSION=${{ steps.previous.outputs.version || 'ci' }}
+          CB_REPO=${GITHUB_REPOSITORY,,}
+          CB_HOME=$CB_HOME
+          APP_PORT=8080
+          ADMIN_EMAIL=$ADMIN_EMAIL
+          ADMIN_PASSWORD=$ADMIN_PASSWORD
+          POSTGRES_PASSWORD=ci-postgres-password
+          MASTER_KEY=$(head -c 32 /dev/urandom | base64)
+          COOKIE_SECURE=false
+          EOF
+
+      - name: Log in to the container registry
+        if: steps.previous.outputs.version != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Start the previous release and add data
+        if: steps.previous.outputs.version != ''
+        run: |
+          compose="docker compose --project-directory $CB_HOME -f $CB_HOME/docker-compose.yml --env-file $CB_HOME/.env"
+          $compose up -d postgres ollama api worker
+          scripts/smoke-test.sh http://localhost:8080 "$ADMIN_EMAIL" "$ADMIN_PASSWORD" --seed
+
+      - name: Upgrade to this build (or start it fresh)
+        run: |
+          compose="docker compose --project-directory $CB_HOME -f $CB_HOME/docker-compose.yml --env-file $CB_HOME/.env"
+          sed -i 's/^CB_VERSION=.*/CB_VERSION=ci/' "$CB_HOME/.env"
+          $compose up -d postgres ollama api worker
+
+      - name: Data from the previous release survived
+        if: steps.previous.outputs.version != ''
+        run: scripts/smoke-test.sh http://localhost:8080 "$ADMIN_EMAIL" "$ADMIN_PASSWORD" --verify
+
+      - name: Smoke test
+        run: scripts/smoke-test.sh http://localhost:8080 "$ADMIN_EMAIL" "$ADMIN_PASSWORD"
+
+      - name: Updater starts and can read its configuration
+        run: |
+          compose="docker compose --project-directory $CB_HOME -f $CB_HOME/docker-compose.yml --env-file $CB_HOME/.env"
+          $compose run --rm --no-deps updater chat-builder help
+          $compose run --rm --no-deps updater sh -c 'docker compose --project-directory "$CB_HOME" -f "$CB_HOME/docker-compose.yml" --env-file "$CB_HOME/.env" ps'
+
+      - name: Container logs
+        if: failure()
+        run: docker compose --project-directory "$CB_HOME" -f "$CB_HOME/docker-compose.yml" --env-file "$CB_HOME/.env" logs --tail 200

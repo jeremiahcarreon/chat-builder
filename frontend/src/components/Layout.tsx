@@ -1,6 +1,9 @@
 import { Database, LogOut, MessagesSquare, BarChart3, Settings } from "lucide-react";
 import { NavLink, Outlet } from "react-router";
+import { useQuery } from "@tanstack/react-query";
+import { api, type UpdateStatus } from "../api";
 import { useCurrentUser, useLogout } from "../auth";
+import { UpdateBanner } from "./UpdateBanner";
 
 const nav = [
   { to: "/apps", label: "Chat Apps", icon: MessagesSquare },
@@ -12,6 +15,10 @@ const nav = [
 export function Layout() {
   const { data: user } = useCurrentUser();
   const logout = useLogout();
+  const { data: updates } = useQuery({
+    queryKey: ["updates"],
+    queryFn: () => api<UpdateStatus>("/api/system/updates"),
+  });
 
   return (
     <div className="flex min-h-screen">
@@ -35,6 +42,7 @@ export function Layout() {
         </nav>
         <div className="border-t border-slate-200 p-3">
           <div className="truncate px-3 pb-2 text-xs text-slate-500">{user?.email}</div>
+          {updates && <div className="px-3 pb-2 text-xs text-slate-400">Version {updates.current}</div>}
           <button
             onClick={logout}
             className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
@@ -45,6 +53,7 @@ export function Layout() {
         </div>
       </aside>
       <main className="flex-1 overflow-y-auto">
+        <UpdateBanner />
         <div className="mx-auto max-w-4xl px-8 py-8">
           <Outlet />
         </div>

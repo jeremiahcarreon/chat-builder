@@ -1,0 +1,93 @@
+# Chat Builder: production compose file, installed by install.sh.
+#
+# This file is yours to customize: ports, volumes, bind mounts, extra settings.
+# Updates never modify it. They change only CB_VERSION in .env, download the
+# new prebuilt image, and recreate the api and worker containers from this same
+# configuration (data in volumes is untouched; migrations run on start).
+#
+# Uses published images; nothing is built on this machine.
+
+name: chat-builder
+
+x-app: &app
+  image: ghcr.io/${CB_REPO:-jeremiahcarreon/chat-builder}:${CB_VERSION:?set CB_VERSION in .env}
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+psycopg://chatbuilder:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/chatbuilder
+    OLLAMA_URL: http://ollama:11434
+    UPDATE_STATE_DIR: /data/updates
+  volumes:
+    - uploads:/data/uploads
+    - updates:/data/updates
+  # Lets connections to "host.docker.internal" reach databases on this machine.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *app
+    ports:
+      - "${APP_PORT:-8080}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      api:
+        # The api container runs database migrations on start.
+        condition: service_healthy
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: chatbuilder
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: chatbuilder
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatbuilder -d chatbuilder"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+  # Checks GitHub for new releases and installs them (see deploy/chat-builder).
+  # It controls the other containers through the Docker socket.
+  updater:
+    image: ghcr.io/${CB_REPO:-jeremiahcarreon/chat-builder}-updater:${CB_VERSION:?set CB_VERSION in .env}
+    environment:
+      CB_HOME: ${CB_HOME:?set CB_HOME in .env}
+      CB_STATE_DIR: /data/updates
+      CB_IN_UPDATER: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path as on the host, so compose resolves files identically.
+      - ${CB_HOME}:${CB_HOME}
+      - updates:/data/updates
+    command: ["chat-builder", "watch"]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  uploads:
+  ollama:
+  updates:

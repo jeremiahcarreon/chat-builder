@@ -1,0 +1,319 @@
+#!/usr/bin/env bash
+# chat-builder: manage a Chat Builder installation.
+#
+# Runs on the host (installed by install.sh) and inside the "updater" container,
+# which uses `chat-builder watch` to check for and apply updates automatically.
+#
+# Usage: chat-builder <command>
+#   start | stop | restart | status | logs [service] | open
+#   update            Install the latest release now
+#   check             Check GitHub for a newer release
+#   version           Show installed and latest versions
+#   backup            Back up the database to $CB_HOME/backups
+#   uninstall         Stop and remove containers (add --purge to delete data)
+#   watch             Updater loop (used by the updater container)
+
+set -euo pipefail
+
+CB_HOME="${CB_HOME:-$HOME/chat-builder}"
+ENV_FILE="$CB_HOME/.env"
+COMPOSE_FILE="$CB_HOME/docker-compose.yml"
+BACKUP_DIR="$CB_HOME/backups"
+# Where update status is shared with the web app (a Docker volume in the updater).
+STATE_DIR="${CB_STATE_DIR:-$CB_HOME/.state}"
+STATE_FILE="$STATE_DIR/update-state.json"
+REQUEST_FILE="$STATE_DIR/update-requested"
+
+CHECK_INTERVAL_SECONDS="${CB_CHECK_INTERVAL:-1800}"   # look for releases every 30 minutes
+AUTO_UPDATE_AFTER_SECONDS="${CB_AUTO_UPDATE_AFTER:-86400}" # install within a day of release
+HEALTH_TIMEOUT_SECONDS=240
+BACKUPS_TO_KEEP=7
+
+# ---------------------------------------------------------------- helpers
+
+say() { printf '%s\n' "$*"; }
+warn() { printf 'chat-builder: %s\n' "$*" >&2; }
+die() { warn "$*"; exit 1; }
+now() { date -u +%s; }
+
+env_get() {
+  local key="$1"
+  [ -f "$ENV_FILE" ] || return 0
+  grep -E "^${key}=" "$ENV_FILE" | tail -n1 | cut -d= -f2- || true
+}
+
+env_set() {
+  local key="$1" value="$2" tmp
+  tmp="$(mktemp "$CB_HOME/.env.XXXXXX")"
+  if grep -qE "^${key}=" "$ENV_FILE"; then
+    sed -E "s|^${key}=.*|${key}=${value}|" "$ENV_FILE" >"$tmp"
+  else
+    cat "$ENV_FILE" >"$tmp"
+    printf '%s=%s\n' "$key" "$value" >>"$tmp"
+  fi
+  chmod 600 "$tmp"
+  mv "$tmp" "$ENV_FILE"
+}
+
+repo() { local r; r="$(env_get CB_REPO)"; echo "${r:-jeremiahcarreon/chat-builder}"; }
+installed_version() { env_get CB_VERSION; }
+
+compose() {
+  [ -f "$COMPOSE_FILE" ] || die "No installation found in $CB_HOME (set CB_HOME if it's elsewhere)."
+  docker compose --project-directory "$CB_HOME" -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+}
+
+require_docker() {
+  command -v docker >/dev/null 2>&1 || die "Docker is not installed."
+  docker compose version >/dev/null 2>&1 || die "The Docker Compose plugin is not installed."
+  docker info >/dev/null 2>&1 || die "Can't reach Docker. Is it running, and can this user use it?"
+}
+
+# Compares two versions (x.y.z). Succeeds if $1 is newer than $2.
+version_gt() {
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" ]
+}
+
+# Latest published release (not drafts or pre-releases), without the leading "v".
+latest_release() {
+  local body tag
+  body="$(curl -fsSL --max-time 20 -H 'Accept: application/vnd.github+json' \
+    "https://api.github.com/repos/$(repo)/releases/latest")" || return 1
+  tag="$(printf '%s' "$body" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name": *"v?([^"]+)".*/\1/')"
+  [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  echo "$tag"
+}
+
+raw_url() { echo "https://raw.githubusercontent.com/$(repo)/v$1/$2"; }
+
+# ------------------------------------------------------------ update state
+# A small JSON file the web app reads to show the update banner.
+
+json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\n'; }
+
+state_get() {
+  local key="$1"
+  [ -f "$STATE_FILE" ] || return 0
+  grep -oE "\"${key}\": *(\"[^\"]*\"|[0-9]+|null)" "$STATE_FILE" | head -n1 | sed -E 's/^"[^"]+": *"?([^"]*)"?$/\1/' | sed 's/^null$//'
+}
+
+# write_state status latest detected_at message
+write_state() {
+  local status="$1" latest="$2" detected="$3" message="$4" current checked deadline=null
+  mkdir -p "$STATE_DIR"
+  current="$(installed_version)"
+  checked="$(now)"
+  if [ -n "$latest" ] && [ -n "$detected" ] && version_gt "$latest" "$current"; then
+    deadline="$((detected + AUTO_UPDATE_AFTER_SECONDS))"
+  fi
+  local tmp
+  tmp="$(mktemp "$STATE_DIR/.state.XXXXXX")"
+  cat >"$tmp" <<EOF
+{
+  "current": "$(json_escape "$current")",
+  "latest": "$(json_escape "$latest")",
+  "status": "$(json_escape "$status")",
+  "message": "$(json_escape "$message")",
+  "checked_at": $checked,
+  "detected_at": ${detected:-null},
+  "auto_update_at": $deadline,
+  "release_url": "https://github.com/$(repo)/releases/tag/v$(json_escape "$latest")"
+}
+EOF
+  chmod 644 "$tmp"
+  mv "$tmp" "$STATE_FILE"
+}
+
+# ------------------------------------------------------------------ backup
+
+backup() {
+  mkdir -p "$BACKUP_DIR"
+  local file
+  file="$BACKUP_DIR/chatbuilder-$(installed_version)-$(date -u +%Y%m%d-%H%M%S).sql.gz"
+  say "Backing up the database to $file"
+  compose exec -T postgres pg_dump -U chatbuilder --clean --if-exists chatbuilder | gzip >"$file.partial"
+  mv "$file.partial" "$file"
+  # Keep the most recent backups only.
+  ls -1t "$BACKUP_DIR"/chatbuilder-*.sql.gz 2>/dev/null | tail -n +$((BACKUPS_TO_KEEP + 1)) | xargs -r rm -f
+}
+
+# ------------------------------------------------------------------ health
+
+wait_healthy() {
+  local deadline=$(( $(now) + HEALTH_TIMEOUT_SECONDS ))
+  while [ "$(now)" -lt "$deadline" ]; do
+    if compose exec -T api python -c \
+      "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)" \
+      >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+
+# ------------------------------------------------------------------ update
+
+in_updater() { [ "${CB_IN_UPDATER:-}" = "1" ]; }
+
+# Recreates the updater container on the new image. The updater can't replace
+# itself while it's running, so a short-lived helper container does it.
+restart_updater() {
+  if in_updater; then
+    docker run -d --rm \
+      -v /var/run/docker.sock:/var/run/docker.sock \
+      -v "$CB_HOME:$CB_HOME" \
+      -e CB_HOME="$CB_HOME" \
+      "ghcr.io/$(repo)-updater:$(installed_version)" \
+      sh -c 'sleep 5; docker compose --project-directory "$CB_HOME" -f "$CB_HOME/docker-compose.yml" --env-file "$CB_HOME/.env" pull --quiet updater && docker compose --project-directory "$CB_HOME" -f "$CB_HOME/docker-compose.yml" --env-file "$CB_HOME/.env" up -d --no-deps updater' \
+      >/dev/null
+  else
+    compose pull --quiet updater && compose up -d --no-deps updater
+  fi
+}
+
+# Replaces this script on the host with the new release's copy.
+update_cli() {
+  in_updater && return 0
+  local target="$1" self tmp
+  self="$(command -v chat-builder 2>/dev/null || echo "$0")"
+  [ -w "$self" ] || { warn "Can't update $self (no write permission); run the installer again to refresh it."; return 0; }
+  tmp="$(mktemp)"
+  if curl -fsSL --max-time 30 "$(raw_url "$target" deploy/chat-builder)" -o "$tmp"; then
+    chmod 755 "$tmp"
+    mv "$tmp" "$self"
+  else
+    rm -f "$tmp"
+  fi
+}
+
+apply_update() {
+  local target="$1" previous detected
+  previous="$(installed_version)"
+  detected="$(state_get detected_at)"
+  version_gt "$target" "$previous" || { say "Already on $previous."; return 0; }
+
+  say "Updating Chat Builder $previous -> $target"
+  write_state updating "$target" "$detected" "Installing version $target"
+  rm -f "$REQUEST_FILE"
+
+  backup || { write_state failed "$target" "$detected" "Backup failed; update not installed"; return 1; }
+
+  # Only the release number changes. The compose file is the owner's (ports,
+  # volumes, mounts) and is never modified by an update.
+  env_set CB_VERSION "$target"
+  if ! compose config -q || ! compose pull --quiet api worker; then
+    rollback "$previous" "Couldn't download the version $target images"
+    return 1
+  fi
+
+  # Recreates only the app containers on the new image, with the same settings,
+  # volumes and ports. Database migrations run automatically when the api starts.
+  compose up -d --no-deps api worker
+  if ! wait_healthy; then
+    rollback "$previous" "Version $target didn't start correctly"
+    return 1
+  fi
+
+  write_state idle "$target" "" "Updated from $previous to $target"
+  say "Chat Builder is now on version $target."
+  update_cli "$target"
+  restart_updater
+}
+
+rollback() {
+  local previous="$1" reason="$2"
+  warn "$reason; returning to $previous"
+  env_set CB_VERSION "$previous"
+  compose up -d --no-deps api worker || true
+  write_state failed "$(state_get latest)" "$(state_get detected_at)" "$reason. Still on $previous; it will be retried."
+}
+
+# Checks GitHub and records the result. Prints the newer version, if any.
+check() {
+  local latest current detected
+  current="$(installed_version)"
+  latest="$(latest_release)" || { warn "Couldn't reach GitHub to check for updates."; return 1; }
+  detected="$(state_get detected_at)"
+  if version_gt "$latest" "$current"; then
+    # Keep the first time this version was seen: the auto-update deadline counts from it.
+    [ "$(state_get latest)" = "$latest" ] && [ -n "$detected" ] || detected="$(now)"
+    write_state available "$latest" "$detected" "Version $latest is available"
+    echo "$latest"
+  else
+    write_state idle "$latest" "" "Up to date"
+  fi
+}
+
+watch_loop() {
+  local last_check=0 latest deadline
+  say "Watching for Chat Builder updates every $((CHECK_INTERVAL_SECONDS / 60)) minutes."
+  # The web app (a non-root user) writes "update now" requests here.
+  mkdir -p "$STATE_DIR" && chmod 777 "$STATE_DIR"
+  while true; do
+    if [ $(( $(now) - last_check )) -ge "$CHECK_INTERVAL_SECONDS" ]; then
+      check >/dev/null || true
+      last_check="$(now)"
+    fi
+    latest="$(state_get latest)"
+    if [ -n "$latest" ] && version_gt "$latest" "$(installed_version)"; then
+      deadline="$(state_get auto_update_at)"
+      if [ -f "$REQUEST_FILE" ] || { [ -n "$deadline" ] && [ "$(now)" -ge "$deadline" ]; }; then
+        apply_update "$latest" || true
+      fi
+    fi
+    sleep 30
+  done
+}
+
+# ---------------------------------------------------------------- commands
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  start)
+    require_docker
+    compose up -d
+    say "Chat Builder is starting at http://localhost:$(env_get APP_PORT || echo 8080)"
+    ;;
+  stop) require_docker; compose stop ;;
+  restart) require_docker; compose restart ;;
+  status) require_docker; compose ps ;;
+  logs) require_docker; compose logs -f --tail 200 "$@" ;;
+  open)
+    url="http://localhost:$(env_get APP_PORT)"
+    (command -v xdg-open >/dev/null && xdg-open "$url") || (command -v open >/dev/null && open "$url") || say "$url"
+    ;;
+  version)
+    say "Installed: $(installed_version)"
+    latest="$(latest_release || echo unknown)"
+    say "Latest:    $latest"
+    ;;
+  check)
+    latest="$(check)" || exit 1
+    if [ -n "$latest" ]; then say "Version $latest is available. Run: chat-builder update"; else say "Up to date ($(installed_version))."; fi
+    ;;
+  update)
+    require_docker
+    latest="$(latest_release)" || die "Couldn't reach GitHub to check for updates."
+    apply_update "$latest"
+    ;;
+  backup) require_docker; backup ;;
+  uninstall)
+    require_docker
+    if [ "${1:-}" = "--purge" ]; then
+      read -r -p "Delete ALL Chat Builder data (database, uploads, models)? Type 'delete' to confirm: " answer </dev/tty
+      [ "$answer" = "delete" ] || die "Cancelled."
+      compose down --volumes
+      say "Containers and data removed. Your settings and backups remain in $CB_HOME."
+    else
+      compose down
+      say "Containers removed. Data is kept; run 'chat-builder start' to bring it back, or 'uninstall --purge' to delete it."
+    fi
+    ;;
+  watch) watch_loop ;;
+  help|-h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
+  --update) require_docker; latest="$(latest_release)" || die "Couldn't reach GitHub."; apply_update "$latest" ;;
+  *) die "Unknown command: $cmd (try: chat-builder help)" ;;
+esac
