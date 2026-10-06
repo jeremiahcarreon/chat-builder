@@ -143,6 +143,40 @@ class JevClient:
         about = options.get(topic.choice) or "one of the app's topics"
         return "allowed", topic.confidence, f"About: {about}"[:300], usage
 
+    async def route(
+        self,
+        model: str,
+        app: ChatApp,
+        levels: list[str],
+        recent: list[dict],
+        message: str,
+        difficulty_instructions: str,
+        unsatisfied_instructions: str | None,
+    ) -> tuple[int, float | None, dict, Completion]:
+        """For automatic model choice: (tier, P(unsatisfied) or None, details, usage)."""
+        options = {f"level{i}": level for i, level in enumerate(levels, start=1)}
+        questions = {"difficulty": ts.Choice(instructions=difficulty_instructions, criteria=options)}
+        if unsatisfied_instructions:
+            questions["unsatisfied"] = ts.Noul(instructions=unsatisfied_instructions)
+        try:
+            response = await self.client.system_one(
+                state={
+                    "assistant": app.name,
+                    "purpose": app.description.strip() or app.in_scope.strip(),
+                    "recent_conversation": recent,
+                    "latest_message": message[:MESSAGE_CHARS],
+                },
+                questions=questions,
+                model=model,
+            )
+        except ts.TypeSafeError as exc:
+            raise _error(exc) from exc
+        difficulty = response.choices["difficulty"]
+        tier = list(options).index(difficulty.choice) if difficulty.choice in options else 0
+        unsatisfied = response.nouls["unsatisfied"].noul if unsatisfied_instructions else None
+        details = {"difficulty": {k: round(v, 3) for k, v in difficulty.probabilities.items()}}
+        return tier, unsatisfied, details, _usage(response)
+
     async def judge(self, model: str, question: str, reference: str, answer: str) -> tuple[bool, str, int, int]:
         """Whether an answer agrees with a reference answer (for test grading)."""
         try:

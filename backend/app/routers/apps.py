@@ -7,12 +7,38 @@ from sqlalchemy import func, select
 
 from app.deps import AdminUser, DbSession
 from app.evals.versions import current_version
+from app.llm.router import MAX_TIERS, ladder
+from app.llm.sampling import EFFORTS
 from app.models import ChatApp, Conversation, DataSource
-from app.providers import PROVIDERS
+from app.providers import JEV_PROVIDER, PROVIDERS, has_key
 
 router = APIRouter(prefix="/api/apps", tags=["apps"])
 
 LONG_TEXT = 10_000
+
+
+class RouteTier(BaseModel):
+    provider: str
+    model: str = Field(min_length=1, max_length=200)
+    # Effort levels to try on this model, lowest first; empty for models without effort.
+    efforts: list[str] = Field(default_factory=list, max_length=len(EFFORTS))
+    # What this tier is for, shown to the router (blank uses a standard description).
+    use_for: str = Field(default="", max_length=300)
+
+    @field_validator("provider")
+    @classmethod
+    def _chat_provider(cls, value: str) -> str:
+        if value not in PROVIDERS or not PROVIDERS[value].chat:
+            raise ValueError(f"Unknown chat provider: {value}")
+        return value
+
+    @field_validator("efforts")
+    @classmethod
+    def _efforts(cls, value: list[str]) -> list[str]:
+        unknown = [e for e in value if e not in EFFORTS]
+        if unknown:
+            raise ValueError(f"Unknown effort level: {unknown[0]}")
+        return sorted(set(value), key=EFFORTS.index)
 
 
 class AppIn(BaseModel):
@@ -39,6 +65,16 @@ class AppIn(BaseModel):
     classifier_model: str | None = Field(default=None, max_length=200)
     classifier_strictness: str = "balanced"
     classifier_fail_open: bool = True
+    auto_route: bool = False
+    route_tiers: list[RouteTier] = Field(default_factory=list, max_length=MAX_TIERS)
+    router: str = "jev"
+
+    @field_validator("router")
+    @classmethod
+    def _router(cls, value: str) -> str:
+        if value not in ("jev", "llm"):
+            raise ValueError("Must be jev or llm")
+        return value
 
     @field_validator("provider")
     @classmethod
@@ -115,8 +151,29 @@ def list_apps(db: DbSession, user: AdminUser) -> list[AppOut]:
     return [_out(app, n_sources, n_conversations) for app, n_sources, n_conversations in rows]
 
 
+def check_routing(db: DbSession, body: AppIn) -> None:
+    """Automatic model choice needs a ladder to climb and keys for the models on it."""
+    if not body.auto_route:
+        return
+    steps, _ = ladder([t.model_dump() for t in body.route_tiers])
+    if len(steps) < 2:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Automatic model choice needs at least two models or effort levels to choose from."
+        )
+    if body.router == "jev" and not has_key(db, None, JEV_PROVIDER):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Add a TypeSafe (Jev) API key in Settings, or let the classifier model choose."
+        )
+    for tier in body.route_tiers:
+        if PROVIDERS[tier.provider].needs_key and not has_key(db, None, tier.provider):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"Add an API key for {PROVIDERS[tier.provider].label} to use {tier.model}."
+            )
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_app(body: AppIn, db: DbSession, user: AdminUser) -> AppOut:
+    check_routing(db, body)
     app = ChatApp(owner_id=user.id, **body.model_dump())
     db.add(app)
     db.flush()
@@ -133,6 +190,7 @@ def get_app(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> AppOut:
 @router.put("/{app_id}")
 def update_app(app_id: uuid.UUID, body: AppIn, db: DbSession, user: AdminUser) -> AppOut:
     app = owned_app(db, user, app_id)
+    check_routing(db, body)
     for name, value in body.model_dump().items():
         setattr(app, name, value)
     db.flush()

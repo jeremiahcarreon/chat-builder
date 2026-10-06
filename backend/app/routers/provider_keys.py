@@ -14,6 +14,7 @@ from app.providers import (
     get_api_key,
     key_context,
     list_models,
+    model_efforts,
     test_api_key,
     workspace_key,
 )
@@ -143,11 +144,18 @@ class SamplingSupportOut(BaseModel):
     temperature: bool
     seed: bool
     note: str
+    # Effort levels the model accepts, lowest first (for automatic model choice).
+    efforts: list[str]
 
 
 @router.get("/{provider}/sampling")
-def sampling_support(provider: str, model: str, _: AdminUser) -> SamplingSupportOut:
-    """Whether a model accepts temperature and seed, for the app editor's slider."""
+async def sampling_support(provider: str, model: str, db: DbSession, _: AdminUser) -> SamplingSupportOut:
+    """Whether a model accepts temperature, seed and effort, for the app editor."""
     _check_provider(provider)
     result = support(provider, model)
-    return SamplingSupportOut(temperature=result.temperature, seed=result.seed, note=result.note)
+    try:
+        api_key = get_api_key(db, None, provider)
+    except ProviderError:
+        api_key = None
+    efforts = await model_efforts(provider, model, api_key)
+    return SamplingSupportOut(temperature=result.temperature, seed=result.seed, note=result.note, efforts=efforts)

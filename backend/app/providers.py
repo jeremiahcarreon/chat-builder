@@ -166,6 +166,29 @@ async def list_models(provider: str, api_key: str) -> list[str]:
         raise ProviderError(f"Unexpected response from provider (HTTP {exc.status_code}).") from None
 
 
+_effort_cache: dict[tuple[str, str], list[str]] = {}
+
+
+async def model_efforts(provider: str, model: str, api_key: str | None) -> list[str]:
+    """Effort levels a model accepts, lowest first. Claude's come from the Models API."""
+    from app.llm.sampling import EFFORTS, effort_levels
+
+    if provider != "anthropic" or not api_key:
+        return effort_levels(provider, model)
+    if (provider, model) not in _effort_cache:
+        try:
+            client = anthropic.AsyncAnthropic(api_key=api_key, timeout=15, max_retries=1)
+            info = await client.models.retrieve(model)
+            effort = info.capabilities.effort if info.capabilities else None
+            if effort is None:
+                return effort_levels(provider, model)
+            levels = [e for e in EFFORTS if effort.supported and getattr(getattr(effort, e, None), "supported", False)]
+        except anthropic.APIError:
+            return effort_levels(provider, model)
+        _effort_cache[(provider, model)] = levels
+    return _effort_cache[(provider, model)]
+
+
 async def test_api_key(provider: str, api_key: str) -> tuple[bool, str | None]:
     """Returns (ok, error message)."""
     try:

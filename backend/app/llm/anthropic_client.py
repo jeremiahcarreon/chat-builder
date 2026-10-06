@@ -15,7 +15,7 @@ from app.llm.base import (
     ToolResult,
     ToolSpec,
 )
-from app.llm.sampling import request_params
+from app.llm.sampling import Sampling, request_params
 
 log = logging.getLogger(__name__)
 
@@ -108,6 +108,10 @@ class AnthropicSession(ChatSession):
                     await on_reset()
                 if attempt == MAX_JSON_RETRIES:
                     raise LLMError("The model produced an invalid tool call. Please try again.") from None
+            except anthropic.BadRequestError as exc:
+                if not self._drop_rejected_effort(exc):
+                    raise _api_error(exc) from exc
+                api, kwargs = self._request(tools)
             except anthropic.APIError as exc:
                 raise _api_error(exc) from exc
 
@@ -134,6 +138,14 @@ class AnthropicSession(ChatSession):
         if tool_calls:
             return StepResult(text, tool_calls, "tool_use", input_tokens, output_tokens)
         return StepResult(text, [], "end", input_tokens, output_tokens)
+
+    def _drop_rejected_effort(self, exc: anthropic.BadRequestError) -> bool:
+        """After a 400 about effort, answer without it (the tier named a level the model lacks)."""
+        if not (self.sampling and self.sampling.effort and "effort" in str(exc.message).lower()):
+            return False
+        log.warning("%s rejected effort %r; answering without it", self.model, self.sampling.effort)
+        self.sampling = Sampling(self.sampling.temperature, self.sampling.seed)
+        return True
 
     def add_tool_results(self, results: list[ToolResult]) -> None:
         # All results for one assistant turn go back in a single user message.

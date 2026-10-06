@@ -16,7 +16,7 @@ from app.llm.base import (
     ToolResult,
     ToolSpec,
 )
-from app.llm.sampling import request_params
+from app.llm.sampling import Sampling, request_params
 from app.providers import PROVIDERS, openai_compatible_client
 
 log = logging.getLogger(__name__)
@@ -83,7 +83,16 @@ class OpenAISession(ChatSession):
         finish_reason = None
         input_tokens = output_tokens = 0
         try:
-            stream = await self.client.chat.completions.create(**kwargs)
+            try:
+                stream = await self.client.chat.completions.create(**kwargs)
+            except openai.BadRequestError as exc:
+                if not (self.sampling and self.sampling.effort and "reasoning_effort" in kwargs and "effort" in str(exc.message).lower()):
+                    raise
+                # The tier named an effort level this model lacks; answer without it.
+                log.warning("%s rejected effort %r; answering without it", self.model, self.sampling.effort)
+                self.sampling = Sampling(self.sampling.temperature, self.sampling.seed)
+                kwargs.pop("reasoning_effort")
+                stream = await self.client.chat.completions.create(**kwargs)
             async for chunk in stream:
                 if chunk.usage:
                     input_tokens = chunk.usage.prompt_tokens or 0

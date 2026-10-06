@@ -5,6 +5,7 @@ Events streamed to the browser (as JSON):
   {"type": "text", "text": ...}               a piece of the answer
   {"type": "reset"}                           discard the answer streamed so far
   {"type": "tool", "label": ...}              the model is querying data
+  {"type": "route", "model": ..., ...}        automatic model choice picked this model
   {"type": "blocked", "message": ...}         the question was refused by the guardrails
   {"type": "error", "message": ...}           something went wrong
   {"type": "done", "message_id": ...}         the turn is complete
@@ -25,10 +26,11 @@ from app.llm import context as context_module
 from app.llm.base import LLMClient, LLMError, ToolResult
 from app.llm.clients import client_for
 from app.llm.prompt import build_system_prompt, build_user_turn
+from app.llm.router import Route, choose_route
 from app.llm.sampling import Sampling
 from app.models import ChatApp, Conversation, Message, UsageEvent
 from app.providers import ProviderError
-from app.routing import chat_model_for, load_cloud_switch
+from app.routing import LOCAL_PROVIDER, chat_model_for, load_cloud_switch
 
 log = logging.getLogger(__name__)
 
@@ -57,8 +59,12 @@ class Prepared:
     # cloud switch is moving local-model apps to a cloud provider).
     provider: str = ""
     model: str = ""
+    effort: str | None = None
     prompt_version_id: int | None = None
     usage: list[UsageEvent] = field(default_factory=list)
+    # Automatic model choice: the conversation's floor and the step that gave the last answer.
+    route_floor: int = 0
+    last_step: int | None = None
 
 
 @dataclass
@@ -138,6 +144,9 @@ def _prepare(req: ChatRequest) -> Prepared:
         )
         prepared.provider, prepared.model = chat_model_for(app, load_cloud_switch(db, app.owner_id))
         prepared.prompt_version_id = current_version(db, app).id
+        if app.auto_route:
+            prepared.route_floor = conversation.route_floor
+            prepared.last_step = last_route_step(db, conversation.id, user_msg.id)
         db.commit()
         try:
             prepared.client = client_for(db, app.owner_id, prepared.provider)
@@ -145,6 +154,42 @@ def _prepare(req: ChatRequest) -> Prepared:
             prepared.setup_error = str(exc)
         db.expunge(app)
         return prepared
+
+
+def last_route_step(db, conversation_id: uuid.UUID, before_id: int) -> int | None:
+    meta = db.scalar(
+        select(Message.meta)
+        .where(Message.conversation_id == conversation_id, Message.role == "assistant", Message.id < before_id)
+        .order_by(Message.id.desc())
+        .limit(1)
+    )
+    step = (meta or {}).get("route", {}).get("step")
+    return step if isinstance(step, int) else None
+
+
+def routed_model(db, app: ChatApp, route: Route) -> tuple[str, str]:
+    """The route's (provider, model), with local steps moved to the cloud when the cloud switch is on."""
+    switch = load_cloud_switch(db, app.owner_id)
+    if switch.active and route.step.provider == LOCAL_PROVIDER:
+        return switch.provider, switch.chat_model
+    return route.step.provider, route.step.model
+
+
+def _unrouted(route: Route, exc: Exception) -> dict:
+    """Route details for an answer the app's own model gave instead (no step, so no escalation from it)."""
+    return {k: v for k, v in route.meta.items() if k != "step"} | {"error": str(exc)}
+
+
+def _apply_route(prep: Prepared, route: Route) -> None:
+    """Points this turn at the routed model and saves a raised floor on the conversation."""
+    with SessionLocal() as db:
+        provider, model = routed_model(db, prep.app, route)
+        client = client_for(db, prep.app.owner_id, provider)
+        if route.floor != prep.route_floor:
+            conversation = db.get(Conversation, prep.conversation_id)
+            conversation.route_floor = route.floor
+            db.commit()
+    prep.client, prep.provider, prep.model, prep.effort = client, provider, model, route.step.effort
 
 
 def _finish(prep: Prepared, answer: str, meta: dict, exclude_turn: bool = False) -> int:
@@ -187,9 +232,28 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
         yield {"type": "error", "message": prep.setup_error}
         return
 
-    # Guardrails run before anything is sent to the main model.
+    # Guardrails run before anything is sent to the main model; the model choice runs alongside.
+    routing = (
+        asyncio.create_task(choose_route(app, prep.history, req.message, prep.route_floor, prep.last_step))
+        if app.auto_route
+        else None
+    )
     verdict = await check_message(app, prep.history, req.message, req.user_id, req.visitor_id)
     prep.usage.extend(verdict.usage)
+    route = await routing if routing else None
+    route_meta = {}
+    if route is not None:
+        prep.usage.extend(route.usage)
+        route_meta = {"route": route.meta}
+        if verdict.allowed:
+            try:
+                await asyncio.to_thread(_apply_route, prep, route)
+            except ProviderError as exc:
+                # The routed provider has no key: answer with the app's own model.
+                log.warning("Routed model unavailable for app %s: %s", app.id, exc)
+                route_meta = {"route": _unrouted(route, exc)}
+            else:
+                yield {"type": "route", "model": prep.model, "effort": prep.effort, "escalated": route.escalated}
     if verdict.meta.get("verdict") == "allowed":
         screened = {"screened": verdict.meta}
     else:
@@ -203,11 +267,13 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
         return
 
     queue: asyncio.Queue[dict | None] = asyncio.Queue()
-    gen = Generation(meta={"model": f"{prep.provider}/{prep.model}", **screened})
+    gen = Generation(meta={"model": f"{prep.provider}/{prep.model}", "effort": prep.effort, **screened, **route_meta})
 
     async def converse() -> None:
         try:
-            await generate(app, prep.client, prep.provider, prep.model, prep.history, req.message, gen, queue.put)
+            await generate(
+                app, prep.client, prep.provider, prep.model, prep.history, req.message, gen, queue.put, effort=prep.effort
+            )
         finally:
             prep.usage.extend(gen.usage)
             await queue.put(None)
@@ -247,6 +313,7 @@ async def generate(
     gen: Generation,
     emit,
     usage_kind: str = "chat",
+    effort: str | None = None,
 ) -> Generation:
     """Answers one question: retrieval, the model call, and any data queries it makes.
 
@@ -263,7 +330,7 @@ async def generate(
         history=history,
         user_message=build_user_turn(question, ctx.excerpts, ctx.table_descriptions),
         max_tokens=app.max_answer_tokens,
-        sampling=Sampling(app.temperature, app.seed),
+        sampling=Sampling(app.temperature, app.seed, effort),
     )
 
     async def on_text(text: str) -> None:
@@ -349,6 +416,21 @@ async def answer_once(app: ChatApp, question: str, usage_kind: str = "test") -> 
     async def ignore(_event: dict) -> None:
         pass
 
-    gen = Generation(meta={"model": f"{provider}/{model}", "screened": verdict.meta})
-    await generate(app, client, provider, model, [], question, gen, ignore, usage_kind=usage_kind)
-    return OneOffAnswer(gen.text, False, gen.meta, verdict.usage + gen.usage)
+    effort, route_meta, route_usage = None, {}, []
+    route = await choose_route(app, [], question, 0, None) if app.auto_route else None
+    if route is not None:
+        route_meta, route_usage = {"route": route.meta}, route.usage
+        try:
+            client, provider, model, effort = await asyncio.to_thread(_routed_client, app, route)
+        except ProviderError as exc:
+            route_meta = {"route": _unrouted(route, exc)}
+
+    gen = Generation(meta={"model": f"{provider}/{model}", "effort": effort, "screened": verdict.meta, **route_meta})
+    await generate(app, client, provider, model, [], question, gen, ignore, usage_kind=usage_kind, effort=effort)
+    return OneOffAnswer(gen.text, False, gen.meta, verdict.usage + route_usage + gen.usage)
+
+
+def _routed_client(app: ChatApp, route: Route) -> tuple[LLMClient, str, str, str | None]:
+    with SessionLocal() as db:
+        provider, model = routed_model(db, app, route)
+        return client_for(db, app.owner_id, provider), provider, model, route.step.effort

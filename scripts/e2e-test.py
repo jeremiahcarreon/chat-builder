@@ -95,7 +95,7 @@ class Client:
         """Sends a chat message and collects the streamed events."""
         body = {"message": message, **({"conversation_id": conversation_id} if conversation_id else {})}
         status, _, data = self.request("POST", f"/api/chat/{app_id}/messages", body)
-        result = {"status": status, "text": "", "tools": [], "blocked": None, "error": None, "message_id": None, "conversation": None}
+        result = {"status": status, "text": "", "tools": [], "blocked": None, "error": None, "message_id": None, "conversation": None, "route": None}
         if status != 200:
             result["error"] = data.decode(errors="replace")
             return result
@@ -118,6 +118,8 @@ class Client:
                     result["message_id"] = event["message_id"]
                 case "conversation":
                     result["conversation"] = event["id"]
+                case "route":
+                    result["route"] = event
         return result
 
 
@@ -224,6 +226,35 @@ def main() -> int:
         check(answer["blocked"] is not None, "a manipulation attempt was blocked", answer)
         answer = admin.chat(app_id, "Hello!")
         check(answer["blocked"] is None and answer["error"] is None, "a greeting was let through", answer)
+
+        step("Automatic model choice")
+        tiers = [
+            {"provider": "scripted", "model": "scripted-small", "efforts": []},
+            {"provider": "scripted", "model": "scripted-large", "efforts": ["low", "high"]},
+        ]
+        routed = {
+            "name": f"E2E Routed {RUN}", "description": "Answers parts questions.", "provider": "scripted",
+            "model": "scripted-small", "classifier_provider": "scripted", "auto_route": True, "router": "llm",
+        }
+        status, _, _ = admin.request("POST", "/api/apps", {**routed, "route_tiers": tiers[:1]})
+        check(status == 400, "automatic model choice needs more than one model or effort level")
+        routed_app = admin.json("POST", "/api/apps", {**routed, "route_tiers": tiers})
+        created_apps.append(routed_app["id"])
+        rid = routed_app["id"]
+        answer = admin.chat(rid, "What is the XR-500?")
+        check(answer["text"].startswith("[scripted-small]"), "a simple question went to the cheapest model", answer)
+        answer = admin.chat(rid, "This is a complex one: compare every order this year.", answer["conversation"])
+        check(answer["text"].startswith("[scripted-large low]"), "a complex question went to the larger model at low effort", answer)
+        check(answer["route"] and answer["route"]["effort"] == "low", "the chat was told which model was chosen", answer)
+        answer = admin.chat(rid, "That's wrong, try again.", answer["conversation"])
+        check(answer["text"].startswith("[scripted-large high]"), "an unsatisfied reply moved up to high effort", answer)
+        check(answer["route"]["escalated"], "the move up was reported", answer)
+        answer = admin.chat(rid, "Thanks. And the FS161?", answer["conversation"])
+        check(answer["text"].startswith("[scripted-large high]"), "the conversation stayed at the raised level", answer)
+        answer = admin.chat(rid, "What is the FS161?")
+        check(answer["text"].startswith("[scripted-small]"), "a new conversation started cheap again", answer)
+        usage = admin.json("GET", "/api/usage?days=1")
+        check("router" in json.dumps(usage), "the router's own usage was recorded")
 
         step("Feedback and versions")
         answer = admin.chat(app_id, "What clearance does the outdoor unit need?")

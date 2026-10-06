@@ -159,6 +159,13 @@ class ChatApp(Base):
     # Encrypted secret the embedding site signs identity tokens with.
     encrypted_embed_secret: Mapped[str | None] = mapped_column(Text)
     widget_color: Mapped[str] = mapped_column(String(16), default="#0f172a", server_default="#0f172a", nullable=False)
+    # Automatic model choice (see app/llm/router.py): each question goes to the cheapest
+    # tier that fits it, and moves up when the person isn't getting what they need.
+    auto_route: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    # Ordered cheapest first: [{"provider", "model", "efforts": [...], "use_for": ""}]
+    route_tiers: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]", nullable=False)
+    # jev | llm (the app's classifier model)
+    router: Mapped[str] = mapped_column(String(16), default="jev", server_default="jev", nullable=False)
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
@@ -256,6 +263,9 @@ class Conversation(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Message count when reviewed; a conversation that continues is reviewed again.
     reviewed_messages: Mapped[int | None] = mapped_column(Integer)
+    # Automatic model choice: the lowest step this conversation may use, raised when
+    # the person wasn't satisfied with an answer.
+    route_floor: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

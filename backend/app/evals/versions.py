@@ -37,8 +37,13 @@ VERSIONED_FIELDS = (
 )
 
 
+# Automatic model choice, recorded only while it's on (so apps without it keep their versions).
+ROUTING_FIELDS = ("auto_route", "route_tiers", "router")
+
+
 def snapshot(app: ChatApp) -> dict:
-    return {field: getattr(app, field) for field in VERSIONED_FIELDS}
+    fields = VERSIONED_FIELDS + (ROUTING_FIELDS if app.auto_route else ())
+    return {field: getattr(app, field) for field in fields}
 
 
 def _hash(settings: dict) -> str:
@@ -74,4 +79,4 @@ def changes(previous: dict | None, current: dict) -> list[str]:
     """Names of the settings that differ from the previous version."""
     if previous is None:
         return []
-    return [field for field in VERSIONED_FIELDS if previous.get(field) != current.get(field)]
+    return [field for field in VERSIONED_FIELDS + ROUTING_FIELDS if previous.get(field) != current.get(field)]
