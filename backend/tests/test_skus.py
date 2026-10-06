@@ -22,6 +22,13 @@ def test_from_filename(filename, expected):
     assert from_filename(filename) == expected
 
 
+def test_words_end_a_part_number():
+    assert from_filename("xr500-manual.txt") == ["XR500"]
+    assert from_filename("fs161-install-guide.pdf") == ["FS161"]
+    assert from_filename("wiring-RK-2.pdf") == ["RK-2"]
+    assert from_filename("FS161-2X12.pdf") == ["FS161-2X12"]
+
+
 def test_find_skus_in_questions():
     assert find_skus("How do I wire the rk-2 relay kit?") == ["RK-2"]
     assert find_skus("Does a 12in fan fit the FS161-2X12 on a 1970 Chevelle?") == ["FS161-2X12"]
