@@ -348,6 +348,11 @@ class TestRun(Base):
     # queued | running | done | failed
     status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
     error: Mapped[str | None] = mapped_column(Text)
+    # Calibration runs answer every case with one tier of the app's model ladder
+    # (see app/evals/calibration.py); ordinary runs leave these empty.
+    calibration_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    tier: Mapped[int | None] = mapped_column(Integer)
+    model_label: Mapped[str | None] = mapped_column(String(250))
     total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     passed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = _created_at()
@@ -389,6 +394,9 @@ class UsageEvent(Base):
     input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     cost_usd: Mapped[float] = mapped_column(Numeric(12, 6), default=0, nullable=False)
+    # Answers picked by automatic model choice: the app's top model ("provider/model"),
+    # so the usage page can compare the cost with always using it.
+    baseline_model: Mapped[str | None] = mapped_column(String(250))
     created_at: Mapped[datetime] = _created_at()
 
 

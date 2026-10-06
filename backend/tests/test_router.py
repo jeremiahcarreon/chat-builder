@@ -115,3 +115,48 @@ async def test_jev_answers_difficulty_and_satisfaction_in_one_call():
     tier, unsatisfied, _, _ = await router.ask_jev(client, "jev-latest", app, levels, [], "Price of FS161?")
     assert unsatisfied is None
     assert "unsatisfied" not in captured[1]["questions"]
+
+
+def test_better_answer_goes_one_step_above_the_answer():
+    app = _app(auto_route=True)
+    route = router.better_route(app, floor=0, last_step=1)
+    assert route.step.label == "anthropic/claude-sonnet-5-5 (high effort)"
+    assert (route.floor, route.escalated) == (2, True)
+    # Not routed before (routing turned on later): one step above the floor.
+    assert router.better_route(app, floor=0, last_step=None).step_index == 1
+    # Already the top: nothing better to offer.
+    assert router.better_route(app, floor=0, last_step=3) is None
+
+
+def test_better_answer_is_offered_below_the_top_only():
+    app = _app(auto_route=True)
+    assert router.can_improve(app, 2)
+    assert not router.can_improve(app, 3)
+    assert not router.can_improve(app, None)
+    assert not router.can_improve(_app(auto_route=False), 0)
+
+
+def test_calibration_and_baseline_use_each_tiers_first_step():
+    app = _app(auto_route=True)
+    assert router.tier_route(app, 1).step.label == "anthropic/claude-sonnet-5-5 (low effort)"
+    assert router.tier_route(app, 5) is None
+    assert router.baseline_label(app) == "anthropic/claude-opus-5-5"
+
+
+def test_calibration_suggestions():
+    from types import SimpleNamespace
+
+    from app.routers.quality import CalibrationCase, suggest
+
+    runs = [SimpleNamespace(tier=i, model_label=name) for i, name in enumerate(["Haiku", "Sonnet", "Opus"])]
+    rows = [
+        CalibrationCase(question="a", passed=[True, True, True], cheapest=0),
+        CalibrationCase(question="b", passed=[True, True, True], cheapest=0),
+        CalibrationCase(question="c", passed=[False, False, True], cheapest=2),
+        CalibrationCase(question="d", passed=[False, False, False], cheapest=None),
+    ]
+    tips = suggest(runs, rows)
+    assert tips[0] == "Haiku answered 2 of 4 questions correctly on its own."
+    assert "No question needed Sonnet; consider removing it from the ladder." in tips
+    assert "Opus was first to get 1 more right." in tips
+    assert tips[-1].startswith("1 question failed on every model.")

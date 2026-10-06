@@ -91,10 +91,13 @@ class Client:
             raise Failure(f"upload to {path} returned {status}: {data[:300].decode(errors='replace')}")
         return json.loads(data)
 
-    def chat(self, app_id: str, message: str, conversation_id: str | None = None) -> dict:
-        """Sends a chat message and collects the streamed events."""
-        body = {"message": message, **({"conversation_id": conversation_id} if conversation_id else {})}
-        status, _, data = self.request("POST", f"/api/chat/{app_id}/messages", body)
+    def chat(self, app_id: str, message: str, conversation_id: str | None = None, *, better_than: int | None = None) -> dict:
+        """Sends a chat message (or asks for a better answer) and collects the streamed events."""
+        if better_than is not None:
+            status, _, data = self.request("POST", f"/api/chat/{app_id}/messages/{better_than}/better")
+        else:
+            body = {"message": message, **({"conversation_id": conversation_id} if conversation_id else {})}
+            status, _, data = self.request("POST", f"/api/chat/{app_id}/messages", body)
         result = {"status": status, "text": "", "tools": [], "blocked": None, "error": None, "message_id": None, "conversation": None, "route": None}
         if status != 200:
             result["error"] = data.decode(errors="replace")
@@ -253,8 +256,44 @@ def main() -> int:
         check(answer["text"].startswith("[scripted-large high]"), "the conversation stayed at the raised level", answer)
         answer = admin.chat(rid, "What is the FS161?")
         check(answer["text"].startswith("[scripted-small]"), "a new conversation started cheap again", answer)
+
+        step("Get a better answer")
+        first = admin.chat(rid, "What is the CC161?")
+        check(first["route"]["can_improve"], "a cheap answer offers a better one", first)
+        better = admin.chat(rid, "", better_than=first["message_id"])
+        check(better["text"].startswith("[scripted-large low]"), "the better answer came one step up", better)
+        reason = admin.json("POST", f"/api/chat/{rid}/messages/{first['message_id']}/feedback", {"rating": -1, "feedback": "Incomplete"})
+        check(reason["feedback"] == "Incomplete", "the optional reason was saved on the answer that missed")
+        shown = admin.json("GET", f"/api/chat/{rid}/conversations/{first['conversation']}")
+        check([m["content"][:21] for m in shown] == ["What is the CC161?", "[scripted-large low] "], "the better answer replaced the old one", shown)
+        best = admin.chat(rid, "", better_than=better["message_id"])
+        check(best["text"].startswith("[scripted-large high]") and not best["route"]["can_improve"], "it can move up to the top step", best)
+        top = admin.chat(rid, "", better_than=best["message_id"])
+        check(top["error"] and "most capable" in top["error"], "there's nothing better than the top step", top)
+        feedback = admin.json("GET", f"/api/apps/{rid}/quality/feedback")
+        missed = next((f for f in feedback if f["message_id"] == first["message_id"]), None)
+        check(missed and missed["better_answer_by"] == "scripted/scripted-large", "the Quality tab shows which answer was improved", feedback)
+
+        step("Savings report")
         usage = admin.json("GET", "/api/usage?days=1")
         check("router" in json.dumps(usage), "the router's own usage was recorded")
+        savings = next((r for r in usage["routing"] if r["app_id"] == rid), None)
+        check(savings and savings["answers"] >= 7, "routed answers are counted per app", savings)
+        check(savings["better_requests"] == 2 and savings["moved_up"] >= 3, "moves up and better answers are counted", savings)
+        check(savings["baseline_model"] == "scripted/scripted-large", "savings compare with the app's top model", savings)
+
+        step("Calibrating the model ladder")
+        for question in ("What is the FS161?", "Which shroud fits the CC161?"):
+            admin.json("POST", f"/api/apps/{rid}/quality/tests", {"question": question, "must_include": "scripted-large"})
+        admin.json("POST", f"/api/apps/{rid}/quality/calibrate")
+        deadline = time.time() + 180
+        while not (calibration := admin.json("GET", f"/api/apps/{rid}/quality/calibration"))["done"] and time.time() < deadline:
+            time.sleep(2)
+        check(calibration["done"], "every tier answered the test set", calibration)
+        check([t["passed"] for t in calibration["tiers"]] == [0, 2], "each tier's results were recorded", calibration)
+        check(calibration["suggestions"][0].startswith("scripted/scripted-small answered 0 of 2"), "the calibration suggests changes", calibration)
+        runs = admin.json("GET", f"/api/apps/{rid}/quality/runs")
+        check(runs == [], "calibration runs stay out of the regular test history", runs)
 
         step("Feedback and versions")
         answer = admin.chat(app_id, "What clearance does the outdoor unit need?")

@@ -273,3 +273,47 @@ async def choose_route(
         )
     ]
     return Route(index, steps[index], new_floor, escalated, reason, meta, events)
+
+
+def _fixed(app: ChatApp, index: int, floor: int, escalated: bool, reason: str) -> Route:
+    steps, _ = ladder(tiers_of(app))
+    meta = {
+        "step": index, "model": steps[index].label, "tier": steps[index].tier,
+        "escalated": escalated, "reason": reason, "router": None,
+    }
+    return Route(index, steps[index], floor, escalated, reason, meta)
+
+
+def better_route(app: ChatApp, floor: int, last_step: int | None) -> Route | None:
+    """One step above the answer the person asked to improve, or None at the top already."""
+    steps, _ = ladder(tiers_of(app))
+    if not steps:
+        return None
+    top = len(steps) - 1
+    base = min(top, last_step if last_step is not None else floor)
+    if base >= top:
+        return None
+    index = base + 1
+    return _fixed(app, index, max(floor, index), True, "Moved up: the person asked for a better answer")
+
+
+def tier_route(app: ChatApp, tier: int) -> Route | None:
+    """The first step of one tier (for calibrating the ladder against the test set)."""
+    steps, starts = ladder(tiers_of(app))
+    if not 0 <= tier < len(starts):
+        return None
+    return _fixed(app, starts[tier], 0, False, f"Calibration: tier {tier + 1}")
+
+
+def can_improve(app: ChatApp, step: int | None) -> bool:
+    """Whether a "better answer" is possible after an answer from this step."""
+    if not app.auto_route or step is None:
+        return False
+    steps, _ = ladder(tiers_of(app))
+    return step < len(steps) - 1
+
+
+def baseline_label(app: ChatApp) -> str | None:
+    """The app's most capable model, the one routing saves the cost of."""
+    tiers = tiers_of(app)
+    return f"{tiers[-1]['provider']}/{tiers[-1]['model']}" if tiers else None

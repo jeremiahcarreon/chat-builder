@@ -16,6 +16,7 @@ from sqlalchemy import and_, case, func, select
 from app.deps import AdminUser, DbSession
 from app.evals.review import waiting_count
 from app.evals.versions import changes, current_version
+from app.llm.router import ladder, tiers_of
 from app.models import ChatApp, Conversation, Message, PromptVersion, TestCase, TestResult, TestRun
 from app.providers import JEV_PROVIDER, has_key
 from app.queue import queue
@@ -172,6 +173,8 @@ class RatedAnswer(BaseModel):
     model: str | None
     rated_at: datetime | None
     test_case_id: uuid.UUID | None
+    # Set when the person clicked "Get a better answer": the model that answered instead.
+    better_answer_by: str | None = None
 
 
 @router.get("/feedback")
@@ -224,6 +227,7 @@ def list_feedback(
             model=m.meta.get("model"),
             rated_at=m.rated_at,
             test_case_id=cases.get(m.id),
+            better_answer_by=m.meta.get("better_requested", {}).get("by"),
         )
         for m, number in rows
     ]
@@ -373,7 +377,12 @@ class ResultOut(BaseModel):
 def _previous_run(db: DbSession, run: TestRun) -> TestRun | None:
     return db.scalar(
         select(TestRun)
-        .where(TestRun.app_id == run.app_id, TestRun.status == "done", TestRun.created_at < run.created_at)
+        .where(
+            TestRun.app_id == run.app_id,
+            TestRun.status == "done",
+            TestRun.created_at < run.created_at,
+            TestRun.calibration_id.is_(None),
+        )
         .order_by(TestRun.created_at.desc())
         .limit(1)
     )
@@ -445,7 +454,12 @@ async def start_run(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> RunOut
 @router.get("/runs")
 def list_runs(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> list[RunOut]:
     app = owned_app(db, user, app_id)
-    runs = db.scalars(select(TestRun).where(TestRun.app_id == app.id).order_by(TestRun.created_at.desc()).limit(50))
+    runs = db.scalars(
+        select(TestRun)
+        .where(TestRun.app_id == app.id, TestRun.calibration_id.is_(None))
+        .order_by(TestRun.created_at.desc())
+        .limit(50)
+    )
     return [_run_out(db, run) for run in runs]
 
 
@@ -478,6 +492,129 @@ def run_results(app_id: uuid.UUID, run_id: uuid.UUID, db: DbSession, user: Admin
     ]
     order = {"regressed": 0, "new": 1, "same": 2, "fixed": 3}
     return sorted(results, key=lambda r: (r.passed, order[r.change]))
+
+
+# ------------------------------------------------------------- calibration
+#
+# Runs the test set once on each tier of the app's model ladder (at its lowest
+# effort) to show which questions the cheaper models already get right.
+
+
+class CalibrationTier(BaseModel):
+    tier: int
+    model: str
+    status: str
+    total: int
+    passed: int
+    completed: int
+
+
+class CalibrationCase(BaseModel):
+    question: str
+    # Pass/fail per tier (None while that tier hasn't answered it yet).
+    passed: list[bool | None]
+    # The cheapest tier that passed, or None if none did.
+    cheapest: int | None
+
+
+class Calibration(BaseModel):
+    id: uuid.UUID | None
+    created_at: datetime | None
+    tiers: list[CalibrationTier]
+    cases: list[CalibrationCase]
+    done: bool
+    suggestions: list[str]
+
+
+@router.post("/calibrate", status_code=status.HTTP_201_CREATED)
+async def start_calibration(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> Calibration:
+    app = owned_app(db, user, app_id)
+    tiers = tiers_of(app)
+    if len(tiers) < 2:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Set up at least two models under automatic model choice first.")
+    count = db.scalar(select(func.count()).select_from(TestCase).where(TestCase.app_id == app.id))
+    if not count:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Add some test cases first.")
+    busy = db.scalar(
+        select(TestRun.id).where(TestRun.app_id == app.id, TestRun.status.in_(("queued", "running"))).limit(1)
+    )
+    if busy:
+        raise HTTPException(status.HTTP_409_CONFLICT, "A test run is already in progress.")
+    version = current_version(db, app)
+    calibration_id = uuid.uuid4()
+    steps, starts = ladder(tiers)
+    runs = [
+        TestRun(app_id=app.id, prompt_version_id=version.id, total=count, calibration_id=calibration_id,
+                tier=number, model_label=steps[starts[number]].label)
+        for number in range(len(tiers))
+    ]
+    db.add_all(runs)
+    db.commit()
+    for run in runs:
+        await queue.configure_task("run_tests", queue="tests").defer_async(run_id=str(run.id))
+    return _calibration(db, app, calibration_id)
+
+
+@router.get("/calibration")
+def latest_calibration(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> Calibration:
+    app = owned_app(db, user, app_id)
+    calibration_id = db.scalar(
+        select(TestRun.calibration_id)
+        .where(TestRun.app_id == app.id, TestRun.calibration_id.is_not(None))
+        .order_by(TestRun.created_at.desc())
+        .limit(1)
+    )
+    return _calibration(db, app, calibration_id)
+
+
+def _calibration(db: DbSession, app: ChatApp, calibration_id: uuid.UUID | None) -> Calibration:
+    if calibration_id is None:
+        return Calibration(id=None, created_at=None, tiers=[], cases=[], done=False, suggestions=[])
+    runs = list(db.scalars(select(TestRun).where(TestRun.calibration_id == calibration_id).order_by(TestRun.tier)))
+    outcomes = [_outcomes(db, run.id) for run in runs]
+    cases = list(db.scalars(select(TestCase).where(TestCase.app_id == app.id).order_by(TestCase.created_at)))
+    rows = []
+    for case_ in cases:
+        passed = [outcome.get(case_.id) for outcome in outcomes]
+        if all(p is None for p in passed):
+            continue
+        cheapest = next((i for i, p in enumerate(passed) if p), None)
+        rows.append(CalibrationCase(question=case_.question, passed=passed, cheapest=cheapest))
+    done = all(run.status in ("done", "failed") for run in runs)
+    return Calibration(
+        id=calibration_id,
+        created_at=runs[0].created_at if runs else None,
+        tiers=[
+            CalibrationTier(tier=run.tier or 0, model=run.model_label or "", status=run.status, total=run.total,
+                            passed=run.passed, completed=len(outcome))
+            for run, outcome in zip(runs, outcomes, strict=True)
+        ],
+        cases=rows,
+        done=done,
+        suggestions=suggest(runs, rows) if done and rows else [],
+    )
+
+
+def suggest(runs: list[TestRun], rows: list[CalibrationCase]) -> list[str]:
+    """Plain-language advice on the ladder from where each question first passed."""
+    total = len(rows)
+    names = [run.model_label or f"tier {run.tier + 1}" for run in runs]
+    first = [sum(1 for r in rows if r.cheapest == i) for i in range(len(runs))]
+    failing = sum(1 for r in rows if r.cheapest is None)
+    tips = [f"{names[0]} answered {first[0]} of {total} questions correctly on its own."]
+    for i in range(1, len(runs)):
+        if first[i] == 0 and i < len(runs) - 1:
+            tips.append(f"No question needed {names[i]}; consider removing it from the ladder.")
+        elif first[i]:
+            tips.append(f"{names[i]} was first to get {first[i]} more right.")
+    if first[-1] == 0 and len(runs) > 1:
+        tips.append(f"Nothing needed {names[-1]}, the most expensive model. A cheaper top model may do.")
+    if failing:
+        tips.append(
+            f"{failing} question{'s' if failing != 1 else ''} failed on every model. Better data, notes or "
+            "test expectations will help more than a bigger model there."
+        )
+    return tips
 
 
 # ------------------------------------------------------------ satisfaction

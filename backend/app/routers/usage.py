@@ -53,6 +53,23 @@ class BlockedMessage(BaseModel):
     created_at: datetime
 
 
+class RoutingSavings(BaseModel):
+    """Automatic model choice for one app: where answers went and what it saved."""
+
+    app_id: uuid.UUID
+    name: str
+    answers: int
+    # Answers per model, like {"anthropic/claude-haiku-4-5": 40}.
+    by_model: dict[str, int]
+    moved_up: int
+    better_requests: int
+    baseline_model: str | None
+    # What the routed answers and routing checks cost, and what the same tokens would
+    # have cost on the app's top model. None when a model involved has no price.
+    actual_cost: float | None
+    baseline_cost: float | None
+
+
 class UsageReport(BaseModel):
     days: int
     input_tokens: int
@@ -67,6 +84,7 @@ class UsageReport(BaseModel):
     by_app: list[AppUsage]
     by_model: list[ModelUsage]
     recent_blocked: list[BlockedMessage]
+    routing: list[RoutingSavings] = []
 
 
 @router.get("")
@@ -192,6 +210,8 @@ def usage_report(db: DbSession, user: AdminUser, days: int = Query(30, ge=1, le=
         amount = cost(entry.input_tokens, entry.output_tokens, price_for(entry.provider, entry.model, custom))
         entry.cost = round(amount, 6) if amount is not None else None
 
+    routing = _routing_savings(db, apps, events, messages, custom)
+
     return UsageReport(
         days=days,
         cost=round(sum(cost_by_app.values()), 6),
@@ -205,4 +225,78 @@ def usage_report(db: DbSession, user: AdminUser, days: int = Query(30, ge=1, le=
         by_app=by_app,
         by_model=by_model,
         recent_blocked=recent_blocked,
+        routing=routing,
     )
+
+
+def _routing_savings(db: DbSession, apps: dict, events, messages, custom) -> list[RoutingSavings]:
+    """Routed answers compared with always using each app's top model, for this period."""
+    route = messages.c.meta["route"]
+    # The same expression objects in SELECT and GROUP BY, so Postgres sees them as equal.
+    model_col, escalated_col = route["model"].astext, route["escalated"].astext
+    answers: dict = {}
+    for app_id, model, escalated, n in db.execute(
+        select(messages.c.app_id, model_col, escalated_col, func.count())
+        .where(messages.c.role == "assistant", messages.c.meta.has_key("route"), route.has_key("step"))
+        .group_by(messages.c.app_id, model_col, escalated_col)
+    ):
+        entry = answers.setdefault(app_id, {"by_model": {}, "moved_up": 0})
+        entry["by_model"][model] = entry["by_model"].get(model, 0) + n
+        if escalated == "true":
+            entry["moved_up"] += n
+    better = dict(
+        db.execute(
+            select(messages.c.app_id, func.count())
+            .where(messages.c.role == "assistant", messages.c.meta.has_key("retry_of"))
+            .group_by(messages.c.app_id)
+        ).all()
+    )
+
+    actual: dict = {}
+    baseline: dict = {}
+    baseline_model: dict = {}
+    unpriced: set = set()
+
+    def add(totals: dict, app_id, amount: float | None) -> None:
+        if amount is None:
+            unpriced.add(app_id)
+        totals[app_id] = totals.get(app_id, 0.0) + (amount or 0.0)
+
+    for app_id, provider, model, top, i, o in db.execute(
+        select(events.c.app_id, events.c.provider, events.c.model, events.c.baseline_model,
+               func.sum(events.c.input_tokens), func.sum(events.c.output_tokens))
+        .where(events.c.baseline_model.is_not(None))
+        .group_by(events.c.app_id, events.c.provider, events.c.model, events.c.baseline_model)
+    ):
+        top_provider, _, top_model = top.partition("/")
+        baseline_model[app_id] = top
+        add(actual, app_id, cost(i or 0, o or 0, price_for(provider, model, custom)))
+        add(baseline, app_id, cost(i or 0, o or 0, price_for(top_provider, top_model, custom)))
+    for app_id, provider, model, i, o in db.execute(
+        select(events.c.app_id, events.c.provider, events.c.model,
+               func.sum(events.c.input_tokens), func.sum(events.c.output_tokens))
+        .where(events.c.kind == "router")
+        .group_by(events.c.app_id, events.c.provider, events.c.model)
+    ):
+        # Routing checks are the price of routing, so they count against the savings.
+        add(actual, app_id, cost(i or 0, o or 0, price_for(provider, model, custom)))
+
+    report = []
+    for app_id, entry in answers.items():
+        if app_id not in apps:
+            continue
+        priced = app_id not in unpriced and app_id in baseline
+        report.append(
+            RoutingSavings(
+                app_id=app_id,
+                name=apps[app_id].name,
+                answers=sum(entry["by_model"].values()),
+                by_model=entry["by_model"],
+                moved_up=entry["moved_up"],
+                better_requests=better.get(app_id, 0),
+                baseline_model=baseline_model.get(app_id),
+                actual_cost=round(actual[app_id], 6) if priced else None,
+                baseline_cost=round(baseline[app_id], 6) if priced else None,
+            )
+        )
+    return sorted(report, key=lambda r: r.name.lower())

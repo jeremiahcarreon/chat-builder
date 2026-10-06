@@ -15,6 +15,7 @@ from sqlalchemy import delete, select
 from app.config import get_settings
 from app.deps import DbSession
 from app.llm.engine import ChatAccessError, ChatRequest, run_chat
+from app.llm.router import can_improve
 from app.models import AppAccess, ChatApp, Conversation, Message, User
 from app.security import SESSION_COOKIE, user_for_token
 
@@ -112,6 +113,8 @@ class MessageOut(BaseModel):
     error: bool = False
     rating: int | None = None
     feedback: str | None = None
+    # Automatic model choice can re-answer this one a step up ("Get a better answer").
+    can_improve: bool = False
     created_at: datetime
 
 
@@ -187,9 +190,12 @@ def conversation_messages(
             error=bool(m.meta.get("error")) and m.meta.get("excluded", False),
             rating=m.rating,
             feedback=m.feedback,
+            can_improve=m.role == "assistant" and can_improve(access.app, m.meta.get("route", {}).get("step")),
             created_at=m.created_at,
         )
         for m in rows
+        # Answers replaced by a better one are hidden.
+        if "replaced_by" not in m.meta.get("better_requested", {})
     ]
 
 
@@ -214,7 +220,26 @@ async def send_message(app_id: uuid.UUID, body: SendMessage, request: Request, d
         visitor_id=access.visitor_id,
     )
     db.close()
+    return _stream(chat_request, access)
 
+
+@router.post("/{app_id}/messages/{message_id}/better")
+async def better_answer(app_id: uuid.UUID, message_id: int, request: Request, db: DbSession):
+    """Answers the same question again one step up the model ladder, replacing this answer."""
+    access = resolve_access(db, request, app_id)
+    chat_request = ChatRequest(
+        app_id=app_id,
+        message="",
+        conversation_id=None,
+        user_id=access.user.id if access.user else None,
+        visitor_id=access.visitor_id,
+        better_than=message_id,
+    )
+    db.close()
+    return _stream(chat_request, access)
+
+
+def _stream(chat_request: ChatRequest, access: Access) -> StreamingResponse:
     async def events():
         try:
             async for event in run_chat(chat_request):
