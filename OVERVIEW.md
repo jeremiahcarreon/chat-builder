@@ -167,6 +167,15 @@ Matching ignores case, spaces and dashes.
   Measured on 40 labeled parts-desk messages: Jev picked the right level for
   21 of 24 questions (all within one level) and caught 16 of 16 unhappy
   replies; a local 3B model scored 22/24 and 15/16.
+- **Get a better answer:** under answers from below the top of the ladder,
+  one click re-answers the same question one step up and replaces the answer.
+  The old answer counts as "not helpful" in the Quality tab, with an optional
+  one-tap reason (Wrong, Incomplete, Didn't answer my question).
+- **Savings report (Usage):** per app, which models answered how often, how
+  often conversations moved up, and the cost compared with sending every
+  answer to the app's top model (routing checks included).
+- **Ladder calibration (Quality):** runs the test set on each model in the
+  ladder and suggests changes, like dropping a tier nothing needed.
 
 ---
 

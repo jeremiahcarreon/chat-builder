@@ -1,10 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronDown, ChevronRight, Loader2, Play, Plus, ThumbsDown, ThumbsUp, Trash2, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Play,
+  Plus,
+  Sparkles,
+  ThumbsDown,
+  ThumbsUp,
+  Trash2,
+  XCircle,
+} from "lucide-react";
 import { useState, type FormEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   api,
+  type Calibration as CalibrationData,
+  type ChatApp,
   type ReviewedConversation,
   type ReviewSummary,
   type TranscriptMessage,
@@ -49,6 +63,7 @@ export function QualityTab({ appId }: { appId: string }) {
       <Satisfaction base={base} />
       <TestSet base={base} />
       <TestRuns base={base} />
+      <Calibration appId={appId} base={base} />
       <Feedback base={base} />
       <Versions base={base} />
     </div>
@@ -253,6 +268,98 @@ function TestRuns({ base }: { base: string }) {
   );
 }
 
+// ------------------------------------------------------------- calibration
+
+function Calibration({ appId, base }: { appId: string; base: string }) {
+  const queryClient = useQueryClient();
+  const { data: app } = useQuery({ queryKey: ["app", appId], queryFn: () => api<ChatApp>(`/api/apps/${appId}`) });
+  const { data } = useQuery({
+    queryKey: ["calibration", base],
+    queryFn: () => api<CalibrationData>(`${base}/calibration`),
+    refetchInterval: (query) => (query.state.data?.id && !query.state.data.done ? 2000 : false),
+  });
+  const start = useMutation({
+    mutationFn: () => api<CalibrationData>(`${base}/calibrate`, { method: "POST" }),
+    onSuccess: (result) => queryClient.setQueryData(["calibration", base], result),
+  });
+  if (!app || app.route_tiers.length < 2) return null;
+  const running = !!data?.id && !data.done;
+
+  return (
+    <Card
+      title="Model ladder calibration"
+      description="Runs the test set on each model in automatic model choice (at its lowest effort) to show which questions the cheaper models already get right."
+    >
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="button" variant="secondary" onClick={() => start.mutate()} disabled={running || start.isPending}>
+            {running ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+            {running ? "Calibrating..." : data?.id ? "Calibrate again" : "Calibrate"}
+          </Button>
+          {data?.created_at && (
+            <span className="text-xs text-slate-500">Last run {new Date(data.created_at).toLocaleString()}</span>
+          )}
+          {start.error && <span className="text-sm text-red-600">{start.error.message}</span>}
+        </div>
+        {data?.id && (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {data.tiers.map((t) => (
+                <div key={t.tier} className="rounded-md border border-slate-200 p-3">
+                  <div className="truncate text-xs text-slate-500" title={t.model}>
+                    {t.tier + 1}. {t.model}
+                  </div>
+                  <div className="mt-1 text-lg font-semibold tabular-nums">
+                    {t.status === "done" ? `${t.passed}/${t.total}` : `${t.completed} of ${t.total}`}
+                  </div>
+                  <div className="text-xs text-slate-500">{t.status === "done" ? "passed" : t.status === "failed" ? "failed" : "answering..."}</div>
+                </div>
+              ))}
+            </div>
+            {data.suggestions.length > 0 && (
+              <ul className="list-disc space-y-1 rounded-md bg-sky-50 py-2 pl-7 pr-3 text-sm text-sky-900">
+                {data.suggestions.map((tip) => (
+                  <li key={tip}>{tip}</li>
+                ))}
+              </ul>
+            )}
+            {data.done && data.cases.length > 0 && (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+                    <th className="py-2 font-medium">Question</th>
+                    {data.tiers.map((t) => (
+                      <th key={t.tier} className="w-16 py-2 text-center font-medium" title={t.model}>
+                        {t.tier + 1}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.cases.map((c) => (
+                    <tr key={c.question} className="border-b border-slate-100 last:border-0">
+                      <td className="py-2 pr-3">{c.question}</td>
+                      {c.passed.map((ok, i) => (
+                        <td key={i} className={`py-2 text-center ${c.cheapest === i ? "bg-emerald-50" : ""}`}>
+                          {ok === null ? "–" : ok ? (
+                            <CheckCircle2 size={15} className="inline text-emerald-600" aria-label="passed" />
+                          ) : (
+                            <XCircle size={15} className="inline text-red-500" aria-label="failed" />
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 const CHANGE_STYLES: Record<TestResultRow["change"], string> = {
   regressed: "bg-red-50 text-red-700",
   fixed: "bg-emerald-50 text-emerald-700",
@@ -336,9 +443,16 @@ function Feedback({ base }: { base: string }) {
           {data.map((r) => (
             <li key={r.message_id} className="py-3 text-sm">
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                {r.rating === 1 ? <ThumbsUp size={13} className="text-emerald-600" /> : <ThumbsDown size={13} className="text-red-600" />}
+                {r.better_answer_by ? (
+                  <Sparkles size={13} className="text-red-600" />
+                ) : r.rating === 1 ? (
+                  <ThumbsUp size={13} className="text-emerald-600" />
+                ) : (
+                  <ThumbsDown size={13} className="text-red-600" />
+                )}
                 <span>Version {r.version_number ?? "?"}</span>
                 {r.model && <span>{r.model}</span>}
+                {r.better_answer_by && <span className="font-medium text-slate-700">Asked for a better answer → {r.better_answer_by}</span>}
                 {r.rated_at && <span>{new Date(r.rated_at).toLocaleString()}</span>}
               </div>
               <div className="mt-1 font-medium">{r.question}</div>

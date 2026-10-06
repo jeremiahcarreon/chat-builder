@@ -99,6 +99,15 @@ export function Usage() {
             <AppTable data={data} />
           </Card>
 
+          {data.routing.length > 0 && (
+            <Card
+              title="Automatic model choice"
+              description="Where routed answers went, and what they cost compared with sending every one to the app's most capable model. Includes the routing checks."
+            >
+              <RoutingTable data={data.routing} />
+            </Card>
+          )}
+
           <Card title="By model" description="Chat answers, classifier checks and test runs are listed separately. Costs are estimates from model prices in Settings.">
             <ModelTable data={data} />
           </Card>
@@ -405,5 +414,57 @@ function BlockedList({ data }: { data: UsageReport }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+function RoutingTable({ data }: { data: UsageReport["routing"] }) {
+  return (
+    <div className="space-y-5">
+      {data.map((r) => {
+        const saved = r.actual_cost !== null && r.baseline_cost !== null ? r.baseline_cost - r.actual_cost : null;
+        const models = Object.entries(r.by_model).sort((a, b) => b[1] - a[1]);
+        return (
+          <div key={r.app_id}>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <Link to={`/apps/${r.app_id}`} className="font-medium hover:underline">
+                {r.name}
+              </Link>
+              <span className="text-sm text-slate-600">
+                {saved === null ? (
+                  "Set model prices in Settings to see savings"
+                ) : (
+                  <>
+                    {money(r.actual_cost)} instead of {money(r.baseline_cost)} on {r.baseline_model}
+                    {saved > 0 && r.baseline_cost ? (
+                      <strong className="ml-1 text-emerald-700">
+                        (saved {money(saved)}, {Math.round((saved / r.baseline_cost) * 100)}%)
+                      </strong>
+                    ) : null}
+                  </>
+                )}
+              </span>
+            </div>
+            <div className="mt-2 space-y-1">
+              {models.map(([model, n]) => (
+                <div key={model} className="flex items-center gap-3 text-sm">
+                  <span className="w-72 shrink-0 truncate text-slate-600" title={model}>
+                    {model}
+                  </span>
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-full rounded-full bg-slate-500" style={{ width: `${(n / r.answers) * 100}%` }} />
+                  </div>
+                  <span className="w-24 shrink-0 text-right tabular-nums text-slate-600">
+                    {number(n)} ({Math.round((n / r.answers) * 100)}%)
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              {number(r.answers)} answers · {number(r.moved_up)} moved up · {number(r.better_requests)} better answers requested
+            </p>
+          </div>
+        );
+      })}
+    </div>
   );
 }

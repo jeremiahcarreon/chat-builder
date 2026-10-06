@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, MessageSquarePlus, Send, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
+import { Loader2, MessageSquarePlus, Send, Sparkles, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -72,6 +72,70 @@ export function ChatPanel({
     setMessages((prev) => [...prev.slice(0, -1), update(prev[prev.length - 1])]);
   }
 
+  function updateMessage(id: ChatMessage["id"], update: (msg: ChatMessage) => ChatMessage) {
+    setMessages((prev) => prev.map((m) => (m.id === id ? update(m) : m)));
+  }
+
+  /** Answers the question behind `message` again, one step up the model ladder, in its place. */
+  async function improve(message: ChatMessage) {
+    if (busy || typeof message.id !== "number") return;
+    const oldId = message.id;
+    const placeholder = `b-${Date.now()}`;
+    setBusy(true);
+    setStatus("Getting a better answer...");
+    updateMessage(oldId, (m) => ({ ...m, id: placeholder, content: "", can_improve: false, notice: undefined }));
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let failed: string | null = null;
+    let newId: number | null = null;
+    try {
+      await streamChat(
+        appId,
+        { better_than: oldId },
+        (ev) => {
+          switch (ev.type) {
+            case "text":
+              setStatus(null);
+              updateMessage(placeholder, (m) => ({ ...m, content: m.content + ev.text }));
+              break;
+            case "reset":
+              updateMessage(placeholder, (m) => ({ ...m, content: "" }));
+              break;
+            case "tool":
+              setStatus(ev.label);
+              break;
+            case "route":
+              updateMessage(placeholder, (m) => ({
+                ...m,
+                can_improve: ev.can_improve,
+                model: `${ev.model}${ev.effort ? `, ${ev.effort} effort` : ""} (better answer)`,
+              }));
+              break;
+            case "error":
+              failed = ev.message;
+              break;
+            case "done":
+              newId = ev.message_id;
+              break;
+          }
+        },
+        controller.signal,
+      );
+    } catch (err) {
+      if (!controller.signal.aborted) failed = err instanceof Error ? err.message : "Request failed";
+    } finally {
+      if (failed || newId === null) {
+        // The original answer stays.
+        updateMessage(placeholder, () => ({ ...message, notice: failed ?? undefined, can_improve: false }));
+      } else {
+        const id = newId;
+        updateMessage(placeholder, (m) => ({ ...m, id, replaced: oldId, rating: null }));
+      }
+      setBusy(false);
+      setStatus(null);
+    }
+  }
+
   async function send(event?: FormEvent) {
     event?.preventDefault();
     const text = input.trim();
@@ -108,6 +172,7 @@ export function ChatPanel({
             case "route":
               updateLast((m) => ({
                 ...m,
+                can_improve: ev.can_improve,
                 model: `${ev.model}${ev.effort ? `, ${ev.effort} effort` : ""}${ev.escalated ? " (moved up)" : ""}`,
               }));
               break;
@@ -192,6 +257,7 @@ export function ChatPanel({
               message={m}
               appId={appId}
               showModel={showModel}
+              onImprove={() => improve(m)}
               // Rating is offered once an answer has finished streaming.
               rateable={!(busy && i === messages.length - 1)}
               onRated={(rated) => setMessages((prev) => prev.map((x) => (x.id === rated.id ? { ...x, ...rated } : x)))}
@@ -234,12 +300,14 @@ function MessageBubble({
   message,
   appId,
   showModel,
+  onImprove,
   rateable,
   onRated,
 }: {
   message: ChatMessage;
   appId: string;
   showModel: boolean;
+  onImprove: () => void;
   rateable: boolean;
   onRated: (message: ChatMessage) => void;
 }) {
@@ -265,10 +333,63 @@ function MessageBubble({
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         </div>
         {showModel && message.model && <p className="mt-1 text-xs text-slate-400">Answered by {message.model}</p>}
+        {message.notice && <p className="mt-1 px-1 text-xs text-slate-500">{message.notice}</p>}
+        {rateable && typeof message.id === "number" && message.replaced !== undefined && (
+          <ReasonChips appId={appId} answerId={message.replaced} />
+        )}
         {rateable && typeof message.id === "number" && !message.error && (
-          <FeedbackBar message={message} appId={appId} onRated={onRated} />
+          <div className="flex flex-wrap items-center gap-x-3">
+            <FeedbackBar message={message} appId={appId} onRated={onRated} />
+            {message.can_improve && !message.blocked && (
+              <button
+                onClick={onImprove}
+                className="mt-1 flex items-center gap-1 rounded px-1 py-0.5 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+              >
+                <Sparkles size={13} /> Get a better answer
+              </button>
+            )}
+          </div>
         )}
       </div>
+    </div>
+  );
+}
+
+const REASONS = ["Wrong", "Incomplete", "Didn't answer my question"];
+
+/** After a better answer: one optional tap saying what was wrong with the one it replaced. */
+function ReasonChips({ appId, answerId }: { appId: string; answerId: number }) {
+  const [state, setState] = useState<"asking" | "thanks" | "closed">("asking");
+
+  async function choose(reason: string) {
+    setState("thanks");
+    try {
+      await api(`/api/chat/${appId}/messages/${answerId}/feedback`, {
+        method: "POST",
+        body: JSON.stringify({ rating: -1, feedback: reason }),
+      });
+    } catch {
+      // Optional feedback; the better answer is what matters.
+    }
+  }
+
+  if (state === "closed") return null;
+  if (state === "thanks") return <p className="mt-1 px-1 text-xs text-slate-500">Thanks, that helps us improve.</p>;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 px-1 text-xs text-slate-500">
+      <span>What was wrong with the first answer?</span>
+      {REASONS.map((reason) => (
+        <button
+          key={reason}
+          onClick={() => choose(reason)}
+          className="rounded-full border border-slate-300 bg-white px-2.5 py-0.5 text-slate-700 hover:border-slate-500"
+        >
+          {reason}
+        </button>
+      ))}
+      <button onClick={() => setState("closed")} className="rounded p-0.5 hover:bg-slate-100" aria-label="Skip">
+        <X size={13} />
+      </button>
     </div>
   );
 }

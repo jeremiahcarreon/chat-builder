@@ -158,6 +158,12 @@ export interface ChatMessage {
   feedback?: string | null;
   // Set live when automatic model choice picked the model (shown in the Try it tab).
   model?: string;
+  // Automatic model choice can re-answer it one step up ("Get a better answer").
+  can_improve?: boolean;
+  // On a better answer: the answer it replaced, which the optional reason is saved on.
+  replaced?: number;
+  // A short note under the answer, like why a better answer wasn't possible.
+  notice?: string;
 }
 
 export type ChatEvent =
@@ -165,23 +171,25 @@ export type ChatEvent =
   | { type: "text"; text: string }
   | { type: "reset" }
   | { type: "tool"; label: string }
-  | { type: "route"; model: string; effort: string | null; escalated: boolean }
+  | { type: "route"; model: string; effort: string | null; escalated: boolean; can_improve: boolean }
   | { type: "blocked"; message: string }
   | { type: "error"; message: string }
   | { type: "done"; message_id: number };
 
-/** Sends a chat message and calls onEvent for each streamed event. */
+/** Sends a chat message (or asks for a better answer) and calls onEvent for each streamed event. */
 export async function streamChat(
   appId: string,
-  body: { message: string; conversation_id: string | null },
+  body: { message: string; conversation_id: string | null } | { better_than: number },
   onEvent: (event: ChatEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(`/api/chat/${appId}/messages`, {
+  const better = "better_than" in body;
+  const url = better ? `/api/chat/${appId}/messages/${body.better_than}/better` : `/api/chat/${appId}/messages`;
+  const response = await fetch(url, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", ...widgetHeaders },
-    body: JSON.stringify(body),
+    body: better ? undefined : JSON.stringify(body),
     signal,
   });
   if (!response.ok || !response.body) {
@@ -277,6 +285,20 @@ export interface UsageReport {
     cost: number | null;
   }[];
   recent_blocked: { app_id: string; app_name: string; question: string; verdict: string; reason: string; created_at: string }[];
+  routing: RoutingSavings[];
+}
+
+/** Automatic model choice for one app over the report's period. */
+export interface RoutingSavings {
+  app_id: string;
+  name: string;
+  answers: number;
+  by_model: Record<string, number>;
+  moved_up: number;
+  better_requests: number;
+  baseline_model: string | null;
+  actual_cost: number | null;
+  baseline_cost: number | null;
 }
 
 export interface CloudSwitch {
@@ -333,6 +355,17 @@ export interface RatedAnswer {
   model: string | null;
   rated_at: string | null;
   test_case_id: string | null;
+  // Set when the person asked for a better answer: the model that gave it.
+  better_answer_by: string | null;
+}
+
+export interface Calibration {
+  id: string | null;
+  created_at: string | null;
+  tiers: { tier: number; model: string; status: string; total: number; passed: number; completed: number }[];
+  cases: { question: string; passed: (boolean | null)[]; cheapest: number | null }[];
+  done: boolean;
+  suggestions: string[];
 }
 
 export interface TestCaseInput {
