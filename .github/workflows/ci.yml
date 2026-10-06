@@ -113,6 +113,7 @@ jobs:
           POSTGRES_PASSWORD=ci-postgres-password
           MASTER_KEY=$(head -c 32 /dev/urandom | base64)
           COOKIE_SECURE=false
+          TEST_MODELS=true
           EOF
 
       - name: Log in to the container registry
@@ -142,6 +143,14 @@ jobs:
 
       - name: Smoke test
         run: scripts/smoke-test.sh http://localhost:8080 "$ADMIN_EMAIL" "$ADMIN_PASSWORD"
+
+      - name: End-to-end tests
+        # Chats, a live database, the widget's signed sign-in, people and export/import,
+        # with scripted stand-in models (TEST_MODELS=true above).
+        run: |
+          compose="docker compose --project-directory $CB_HOME -f $CB_HOME/docker-compose.yml --env-file $CB_HOME/.env"
+          $compose exec -T postgres psql -U chatbuilder -d chatbuilder -v ON_ERROR_STOP=1 -q < scripts/e2e-erp.sql
+          scripts/e2e-test.py http://localhost:8080 "$ADMIN_EMAIL" "$ADMIN_PASSWORD" --erp-host postgres --erp-port 5432
 
       - name: Full backup and restore round trip
         env:

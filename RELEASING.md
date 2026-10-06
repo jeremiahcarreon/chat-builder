@@ -80,7 +80,8 @@ previous release must keep working if an update is rolled back.
 
 ## What CI checks
 
-On every push to `main` and on every release tag:
+On every push to `main`, on pull requests, and on every release tag. Day-to-day
+work happens on branches, which CI doesn't run on until a pull request is opened.
 
 - Backend tests and the frontend build.
 - Migrations apply to an empty database, match the models (`alembic check`),
@@ -91,3 +92,20 @@ On every push to `main` and on every release tag:
 - **Upgrade test:** the previous published release is started with data, then
   upgraded to the new build; the data must survive and the stack must pass the
   smoke test.
+- **End-to-end tests** (`scripts/e2e-test.py`), through the HTTP API with
+  scripted stand-in models (`TEST_MODELS=true`) so answers are predictable and
+  no API keys are needed: answers from an uploaded document; a live Postgres
+  "ERP" connected with a read-only login and queried by the model; writes and
+  forbidden functions refused; out-of-scope and manipulative messages blocked;
+  feedback saved; the widget's frame policy, signed sign-in (automatic
+  accounts; wrong-secret, expired, wrong-app, over-long and incomplete tokens
+  rejected) and blocking; members limited to their apps; export and import.
+- A full encrypted backup restores into the same install with its data intact.
+
+To run the end-to-end tests against any running install started with
+`TEST_MODELS=true` (never set that on a real install):
+
+```sh
+psql -U postgres -f scripts/e2e-erp.sql     # the sample ERP, on a server the install can reach
+scripts/e2e-test.py http://localhost:8080 ADMIN_EMAIL ADMIN_PASSWORD --erp-host HOST --erp-port 5432
+```

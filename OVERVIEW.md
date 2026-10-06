@@ -329,7 +329,8 @@ chat-builder/
 │   ├── docker-compose.yml   # installs: published images + updater
 │   └── chat-builder         # the CLI (also runs inside the updater)
 ├── updater/Dockerfile       # the updater image
-├── scripts/smoke-test.sh    # end-to-end check used by CI
+├── scripts/smoke-test.sh    # quick health and ingestion check used by CI
+├── scripts/e2e-test.py      # end-to-end tests used by CI (see RELEASING.md)
 ├── .github/workflows/       # CI and release pipelines
 ├── backend/
 │   ├── alembic/             # database migrations

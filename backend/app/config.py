@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     static_dir: str = "/app/static"
     upload_dir: str = "/data/uploads"
     max_upload_mb: int = 50
+    # Adds scripted stand-in models for end-to-end tests. Never set this on a real install.
+    test_models: bool = False
 
     @field_validator("master_key")
     @classmethod

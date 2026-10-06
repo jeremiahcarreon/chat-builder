@@ -36,3 +36,9 @@ def test_login_throttle_blocks_after_limit():
     assert not throttle.is_blocked("5.6.7.8")
     throttle.reset("1.2.3.4")
     assert not throttle.is_blocked("1.2.3.4")
+
+
+def test_scripted_models_only_in_test_mode():
+    from app.providers import PROVIDERS, SCRIPTED_PROVIDER
+
+    assert SCRIPTED_PROVIDER not in PROVIDERS

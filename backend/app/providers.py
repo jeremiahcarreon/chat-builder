@@ -68,6 +68,14 @@ PROVIDERS: dict[str, Provider] = {
     ]
 }
 
+# Scripted stand-in models for end-to-end tests (see app/llm/scripted.py).
+SCRIPTED_PROVIDER = "scripted"
+SCRIPTED_MODELS = ["scripted-small", "scripted-medium", "scripted-large"]
+if get_settings().test_models:
+    PROVIDERS[SCRIPTED_PROVIDER] = Provider(
+        SCRIPTED_PROVIDER, "Scripted test models", "", needs_key=False, default_classifier_model="scripted-small"
+    )
+
 # TypeSafe AI's System One model: a fast, inexpensive classifier. When the owner
 # has a key, it screens messages for every app without its own classifier choice.
 JEV_PROVIDER = "typesafe"
@@ -87,7 +95,7 @@ def key_context(provider: str) -> str:
 def get_api_key(db: Session, user_id, provider: str) -> str:
     """Returns the decrypted key for a provider, or raises ProviderError."""
     if not PROVIDERS[provider].needs_key:
-        return "ollama"
+        return provider
     # Keys are shared by the whole workspace; user_id is kept for callers' clarity.
     row = workspace_key(db, provider)
     if row is None:
@@ -134,6 +142,8 @@ async def list_models(provider: str, api_key: str) -> list[str]:
                 raise ProviderError(str(exc)) from None
             finally:
                 await client.aclose()
+        if provider == SCRIPTED_PROVIDER:
+            return SCRIPTED_MODELS
         if provider == "ollama":
             async with httpx.AsyncClient(timeout=10) as http:
                 response = await http.get(f"{get_settings().ollama_url}/api/tags")
