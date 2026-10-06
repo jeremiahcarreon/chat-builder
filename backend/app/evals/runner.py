@@ -6,7 +6,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.db import SessionLocal
 from app.evals.grading import grade
@@ -58,9 +58,9 @@ def _save_result(run_id: uuid.UUID, case_id: uuid.UUID, passed: bool, blocked: b
                           answer=answer, failures=failures, seconds=round(seconds, 2)))
         for event in usage:
             db.add(event)
-        run = db.get(TestRun, run_id)
         if passed:
-            run.passed += 1
+            # Atomic: cases finish concurrently, and a read-modify-write would lose counts.
+            db.execute(update(TestRun).where(TestRun.id == run_id).values(passed=TestRun.passed + 1))
         db.commit()
 
 
@@ -84,7 +84,7 @@ async def run_tests(run_id: uuid.UUID) -> None:
         async def one(case: TestCase) -> None:
             async with semaphore:
                 started = time.monotonic()
-                result = await answer_once(app, case.question)
+                result = await answer_once(app, case.question, tier=run.tier)
                 graded = await grade(app, case, result.text, result.blocked, result.meta, judge_client, judge_model)
                 usage = list(result.usage)
                 if graded.judge_input_tokens or graded.judge_output_tokens:
