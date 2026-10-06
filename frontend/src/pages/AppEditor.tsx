@@ -3,6 +3,7 @@ import { ExternalLink } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api, type ChatApp, type ChatAppInput, type CloudSwitch, type ProviderKey } from "../api";
+import { RoutingCard } from "../components/RoutingCard";
 import { ChatPanel } from "../components/ChatPanel";
 import { Button, Card, Field, Input, Select, Tabs, Textarea, Toggle } from "../components/ui";
 import { ExportButton } from "../components/ExportDialog";
@@ -33,6 +34,9 @@ const blank: ChatAppInput = {
   classifier_fail_open: true,
   temperature: null,
   seed: null,
+  auto_route: false,
+  route_tiers: [],
+  router: "jev",
 };
 
 type Tab = "settings" | "sources" | "chat" | "quality" | "deploy";
@@ -91,7 +95,7 @@ export function AppEditor() {
       />
       {tab === "settings" && <AppSettingsForm initial={app} appId={app.id} />}
       {tab === "sources" && <DataSourcesTab appId={app.id} />}
-      {tab === "chat" && <ChatPanel appId={app.id} className="h-[70vh]" />}
+      {tab === "chat" && <ChatPanel appId={app.id} showModel className="h-[70vh]" />}
       {tab === "quality" && <QualityTab appId={app.id} />}
       {tab === "deploy" && <DeployTab appId={app.id} />}
     </div>
@@ -204,7 +208,9 @@ function AppSettingsForm({ initial, appId }: { initial: ChatAppInput; appId?: st
                 ? "Add an API key for this provider in Settings to see its models."
                 : modelsError
                   ? `Couldn't load models: ${modelsError.message}`
-                  : "Pick from the list or type a model ID."
+                  : form.auto_route
+                    ? "Used when automatic model choice is unavailable."
+                    : "Pick from the list or type a model ID."
             }
           >
             <Input
@@ -219,6 +225,8 @@ function AppSettingsForm({ initial, appId }: { initial: ChatAppInput; appId?: st
           </Field>
         </div>
       </Card>
+
+      <RoutingCard form={form} set={set} providers={providers} />
 
       <ResponseStyleCard form={form} set={set} />
 

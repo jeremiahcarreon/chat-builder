@@ -154,6 +154,19 @@ Matching ignores case, spaces and dashes.
 - **Temperature and seed** per app, sent only to models that accept them.
   Current Claude models and OpenAI reasoning models reject temperature; the
   editor says when a setting has no effect.
+- **Automatic model choice (optional, per app):** the app lists up to four
+  models, cheapest first, each with the effort levels to try (for example
+  Haiku; Sonnet at low, then high effort; Opus). For every message, Jev (or
+  the app's classifier model) judges the question's difficulty, and the
+  answer starts at that tier's lowest effort. If the person's next message
+  says the answer missed, the conversation moves up one step, first more
+  effort and then a bigger model, and stays at least that high. A local app
+  can list cloud models above its own to move up only when needed. Effort is
+  sent as Claude's `output_config.effort` or OpenAI and Gemini's
+  `reasoning_effort`; Claude's supported levels come from the Models API.
+  Measured on 40 labeled parts-desk messages: Jev picked the right level for
+  21 of 24 questions (all within one level) and caught 16 of 16 unhappy
+  replies; a local 3B model scored 22/24 and 15/16.
 
 ---
 

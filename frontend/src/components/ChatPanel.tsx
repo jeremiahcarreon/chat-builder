@@ -10,9 +10,12 @@ export function ChatPanel({
   className = "",
   compact = false,
   newChatSignal = 0,
+  showModel = false,
 }: {
   appId: string;
   className?: string;
+  // Under each answer, which model automatic model choice picked (for app admins testing).
+  showModel?: boolean;
   // The widget: no conversation list; "new chat" comes from its header.
   compact?: boolean;
   newChatSignal?: number;
@@ -102,6 +105,12 @@ export function ChatPanel({
             case "tool":
               setStatus(ev.label);
               break;
+            case "route":
+              updateLast((m) => ({
+                ...m,
+                model: `${ev.model}${ev.effort ? `, ${ev.effort} effort` : ""}${ev.escalated ? " (moved up)" : ""}`,
+              }));
+              break;
             case "blocked":
               updateLast((m) => ({ ...m, content: ev.message, blocked: true }));
               break;
@@ -182,6 +191,7 @@ export function ChatPanel({
               key={m.id}
               message={m}
               appId={appId}
+              showModel={showModel}
               // Rating is offered once an answer has finished streaming.
               rateable={!(busy && i === messages.length - 1)}
               onRated={(rated) => setMessages((prev) => prev.map((x) => (x.id === rated.id ? { ...x, ...rated } : x)))}
@@ -223,11 +233,13 @@ export function ChatPanel({
 function MessageBubble({
   message,
   appId,
+  showModel,
   rateable,
   onRated,
 }: {
   message: ChatMessage;
   appId: string;
+  showModel: boolean;
   rateable: boolean;
   onRated: (message: ChatMessage) => void;
 }) {
@@ -252,6 +264,7 @@ function MessageBubble({
         <div className={`prose-chat rounded-2xl rounded-bl-sm border px-4 py-2 text-sm ${tone}`}>
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         </div>
+        {showModel && message.model && <p className="mt-1 text-xs text-slate-400">Answered by {message.model}</p>}
         {rateable && typeof message.id === "number" && !message.error && (
           <FeedbackBar message={message} appId={appId} onRated={onRated} />
         )}

@@ -113,6 +113,17 @@ export interface ChatAppInput {
   classifier_fail_open: boolean;
   temperature: number | null;
   seed: number | null;
+  auto_route: boolean;
+  route_tiers: RouteTier[];
+  router: "jev" | "llm";
+}
+
+/** One model in an app's automatic-model-choice ladder (cheapest first). */
+export interface RouteTier {
+  provider: string;
+  model: string;
+  efforts: string[];
+  use_for: string;
 }
 
 export interface ChatApp extends ChatAppInput {
@@ -145,6 +156,8 @@ export interface ChatMessage {
   error?: boolean;
   rating?: 1 | -1 | null;
   feedback?: string | null;
+  // Set live when automatic model choice picked the model (shown in the Try it tab).
+  model?: string;
 }
 
 export type ChatEvent =
@@ -152,6 +165,7 @@ export type ChatEvent =
   | { type: "text"; text: string }
   | { type: "reset" }
   | { type: "tool"; label: string }
+  | { type: "route"; model: string; effort: string | null; escalated: boolean }
   | { type: "blocked"; message: string }
   | { type: "error"; message: string }
   | { type: "done"; message_id: number };
