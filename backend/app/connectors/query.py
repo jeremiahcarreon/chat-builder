@@ -6,6 +6,7 @@ import uuid
 
 from sqlalchemy import func, select
 
+from app.connectors.databases import QueryFailed
 from app.connectors.results import MAX_ROWS
 from app.connectors.sql_safety import DIALECTS, UnsafeQuery
 from app.db import SessionLocal
@@ -129,6 +130,9 @@ async def run_sql_tool(ctx, call: ToolCall) -> ToolResult:
         output = await asyncio.to_thread(_execute, uuid.UUID(args["source_id"].strip()), kind, args["sql"])
     except (UnsafeQuery, PermissionError) as exc:
         return ToolResult(call, str(exc), is_error=True)
+    except QueryFailed as exc:
+        log.info("Query failed on %s: %s", args["source_id"], exc)
+        return ToolResult(call, f"Query failed: {str(exc)[:1500]}", is_error=True)
     except Exception as exc:  # noqa: BLE001 - database errors go back to the model to fix the query
         message = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
         log.info("Query failed on %s: %s", args["source_id"], message)

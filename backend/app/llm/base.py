@@ -87,6 +87,13 @@ class ChatSession(ABC):
     @abstractmethod
     def add_tool_results(self, results: list[ToolResult]) -> None: ...
 
+    # Whether add_user_message works (used to send the model results it didn't ask for).
+    accepts_user_messages = False
+
+    def add_user_message(self, text: str) -> None:
+        """Adds a user turn after the model's reply."""
+        raise NotImplementedError
+
     def retry_empty(self) -> bool:
         """After an empty reply (no text, no tool calls), prepare one retry. False if unsupported."""
         return False

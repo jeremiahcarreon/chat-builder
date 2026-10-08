@@ -81,7 +81,8 @@ def test_effort_goes_to_each_provider_in_its_own_form():
     assert request_params("anthropic", "claude-sonnet-5-5", Sampling(effort="low")) == {"output_config": {"effort": "low"}}
     assert request_params("openai", "gpt-5", Sampling(effort="high")) == {"reasoning_effort": "high"}
     assert request_params("gemini", "gemini-2.5-pro", Sampling(effort="low")) == {"reasoning_effort": "low"}
-    assert request_params("ollama", "qwen2.5:3b", Sampling(effort="low")) == {}
+    assert request_params("ollama", "qwen3:14b", Sampling(effort="none")) == {"reasoning_effort": "none"}
+    assert request_params("ollama", "qwen2.5:3b", Sampling()) == {}
     assert without_effort({"reasoning_effort": "low", "seed": 1}) == {"seed": 1}
 
 
@@ -160,3 +161,31 @@ def test_calibration_suggestions():
     assert "No question needed Sonnet; consider removing it from the ladder." in tips
     assert "Opus was first to get 1 more right." in tips
     assert tips[-1].startswith("1 question failed on every model.")
+
+
+def test_local_thinking_models_can_switch_thinking_off():
+    from app.llm.sampling import effort_levels
+
+    assert effort_levels("ollama", "qwen3:14b") == ["none", "high"]
+    assert effort_levels("ollama", "gpt-oss:20b") == ["low", "medium", "high"]
+    assert effort_levels("ollama", "qwen2.5:7b-instruct") == []
+
+
+def test_sql_written_instead_of_run_is_picked_up():
+    from types import SimpleNamespace
+
+    from app.connectors.query import SQL_TOOL
+    from app.llm.base import StepResult
+    from app.llm.engine import written_sql_call
+
+    sid = "8420ac60-10b3-48f5-890c-88c0b64813d0"
+    ctx = SimpleNamespace(queryable={sid: ("mssql", "Catalog")})
+    fenced = StepResult("Let's run:\n```sql\nSELECT * FROM dbo.Shipping WHERE PartNo = 'EC797';\n```\nOne moment.")
+    assert written_sql_call(ctx, [SQL_TOOL], fenced).arguments == {"source_id": sid, "sql": "SELECT * FROM dbo.Shipping WHERE PartNo = 'EC797'"}
+    inline = StepResult("Run this query: `SELECT PartNo FROM dbo.FitmentCondensed WHERE Make = 'BMW'` to see.")
+    assert written_sql_call(ctx, [SQL_TOOL], inline).arguments["sql"].startswith("SELECT PartNo")
+    pasted = StepResult('{"name": "sql_query", "arguments": {"source_id": "%s", "sql": "SELECT 1"}} </tool_call>' % sid)
+    assert written_sql_call(ctx, [SQL_TOOL], pasted).arguments == {"source_id": sid, "sql": "SELECT 1"}
+    # Real tool calls, no tools offered, or no SQL: nothing to do.
+    assert written_sql_call(ctx, [], fenced) is None
+    assert written_sql_call(ctx, [SQL_TOOL], StepResult("The CC797 has a 2 inch core.")) is None

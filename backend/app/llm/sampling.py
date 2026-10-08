@@ -18,11 +18,13 @@ ANTHROPIC_TEMPERATURE = re.compile(r"^claude-(3|haiku-4|sonnet-4|opus-4-[0-6]|op
 OPENAI_REASONING = re.compile(r"^(o\d|gpt-5|gpt-oss)")
 
 
-# Effort levels, lowest first.
-EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
+# Effort levels, lowest first. "none" turns thinking off (local thinking models).
+EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 # Claude models known to accept effort (the Models API reports it for new ones).
 ANTHROPIC_EFFORT = re.compile(r"^claude-(opus-4-[5-9]|sonnet-4-[6-9]|(opus|sonnet|fable)-[5-9])")
 GEMINI_EFFORT = re.compile(r"^gemini-([3-9]|2\.5)")
+# Local models that think before answering; Ollama turns thinking off with "none".
+OLLAMA_THINKING = re.compile(r"^(qwen3|deepseek-r1|magistral|phi4-reasoning|gpt-oss)")
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,9 @@ def effort_levels(provider: str, model: str) -> list[str]:
         return ["low", "medium", "high"]
     if provider == "gemini" and GEMINI_EFFORT.match(model):
         return ["low", "medium", "high"]
+    if provider == "ollama" and OLLAMA_THINKING.match(model):
+        # gpt-oss always thinks some; the others can switch it off.
+        return ["low", "medium", "high"] if model.startswith("gpt-oss") else ["none", "high"]
     if provider == "scripted":
         return ["low", "high"]
     return []
@@ -82,7 +87,7 @@ def request_params(provider: str, model: str, sampling: Sampling | None) -> dict
         params["temperature"] = max(0.0, min(1.0, float(sampling.temperature)))
     if sampling.seed is not None and allowed.seed:
         params["seed"] = int(sampling.seed)
-    if sampling.effort and provider != "ollama":
+    if sampling.effort:
         # Sent as chosen: tiers are checked against the provider's model list when saved.
         if provider == "anthropic":
             params["output_config"] = {"effort": sampling.effort}

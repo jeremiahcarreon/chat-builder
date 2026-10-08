@@ -12,7 +12,9 @@ Events streamed to the browser (as JSON):
 """
 
 import asyncio
+import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -24,7 +26,7 @@ from app.evals.versions import current_version
 from app.guardrails.limits import check_limits
 from app.guardrails.pipeline import check_message
 from app.llm import context as context_module
-from app.llm.base import LLMClient, LLMError, ToolResult
+from app.llm.base import LLMClient, LLMError, ToolCall, ToolResult
 from app.llm.clients import client_for
 from app.llm.prompt import build_system_prompt, build_user_turn
 from app.llm.router import (
@@ -445,6 +447,7 @@ async def generate(
         )
 
     retried_empty = False
+    ran_written_sql = False
     try:
         for round_number in range(MAX_TOOL_ROUNDS + 1):
             result = await session.step(tools, on_text, on_reset)
@@ -454,6 +457,19 @@ async def generate(
                 retried_empty = True
                 result = await session.step(tools, on_text, on_reset)
                 record(result)
+            written = written_sql_call(ctx, tools, result) if not ran_written_sql and round_number < MAX_TOOL_ROUNDS else None
+            if written is not None and session.accepts_user_messages:
+                # Small models often write the SQL out instead of calling the tool. Run it for
+                # them and have them answer from the results, rather than showing SQL.
+                ran_written_sql = True
+                await on_reset()
+                await emit({"type": "tool", "label": context_module.describe_call(ctx, written)})
+                outcome = await context_module.run_tool(ctx, written)
+                gen.meta["tool_calls"].append(
+                    {"name": written.name, "arguments": written.arguments, "error": outcome.is_error, "written": True}
+                )
+                session.add_user_message(WRITTEN_SQL_RESULTS.format(results=outcome.content))
+                continue
             if result.stop_reason == "refusal":
                 await on_text("\n\nI can't help with that request.")
                 gen.meta["refused"] = True
@@ -483,6 +499,48 @@ async def generate(
         gen.meta["error"] = "internal"
         await emit({"type": "error", "message": "Something went wrong while answering."})
     return gen
+
+
+WRITTEN_SQL_RESULTS = (
+    "I ran the SQL you wrote with sql_query. Results:\n{results}\n\nNow answer my original question "
+    "from these results. Don't show SQL. If the query failed or found nothing, fix it and call "
+    "sql_query yourself."
+)
+SQL_FENCE = re.compile(r"```(?:sql|tsql|mysql|postgresql)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+SQL_INLINE = re.compile(r"`((?:SELECT|WITH)\b[^`]+)`", re.IGNORECASE)
+TOOL_CALL_TEXT = re.compile(r'\{\s*"name"\s*:\s*"sql_query"')
+
+
+def written_sql_call(ctx, tools, result) -> ToolCall | None:
+    """A sql_query call for SQL the model wrote in its answer instead of running, if any.
+
+    Small models write it in a ```sql block, in `inline code`, or as the tool call's
+    JSON pasted into the text.
+    """
+    if result.stop_reason != "end" or result.tool_calls or not any(t.name == "sql_query" for t in tools):
+        return None
+    sources = list(ctx.queryable)
+    if match := TOOL_CALL_TEXT.search(result.text):
+        try:
+            data, _ = json.JSONDecoder().raw_decode(result.text[match.start():])
+            arguments = data.get("arguments") if isinstance(data, dict) else None
+        except ValueError:
+            arguments = None
+        if isinstance(arguments, dict) and isinstance(arguments.get("sql"), str):
+            source = arguments.get("source_id") if arguments.get("source_id") in ctx.queryable else None
+            if source or len(sources) == 1:
+                return _written_call(source or sources[0], arguments["sql"])
+    blocks = [b.strip() for b in SQL_FENCE.findall(result.text)] + [b.strip() for b in SQL_INLINE.findall(result.text)]
+    block = next((b for b in blocks if b.lower().startswith(("select", "with"))), None)
+    if not block or len(sources) != 1:
+        return None
+    return _written_call(sources[0], block)
+
+
+def _written_call(source_id: str, sql: str) -> ToolCall:
+    return ToolCall(f"written_{uuid.uuid4().hex[:8]}", "sql_query", {"source_id": source_id, "sql": sql.split(";")[0].strip()})
 
 
 @dataclass

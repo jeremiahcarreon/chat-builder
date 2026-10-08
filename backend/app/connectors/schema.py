@@ -6,11 +6,17 @@ database's own catalog (readable by a read-only login). Owners add notes to
 tables and columns, or hide tables entirely. Each visible table becomes one
 embedded description the assistant can find; hidden tables can't be queried.
 
+It also samples the values of short text columns, so the model knows that
+specs are stored as PAName = 'Core Thickness' rather than in a CoreThickness
+column, or that Make is written 'BMW'. Columns with few distinct values are
+listed in full; others get their most common values as examples.
+
 The full catalog is kept in the source's config ("schema_cache"); notes are in
 "table_notes": {table: {"note": str, "hidden": bool, "columns": {column: note}}}.
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
@@ -150,6 +156,74 @@ def read_metadata(conn, kind: str, tables: list) -> dict[str, TableMeta]:
     return meta
 
 
+TEXT_TYPES = ("char", "text", "string", "varchar", "nvarchar", "nchar", "character", "citext", "enum")
+# A column with at most this many distinct values is listed in full.
+COMPLETE_VALUES = 40
+EXAMPLE_VALUES = 12
+MAX_VALUE_CHARS = 60
+TEXT_COLUMNS_PER_TABLE = 15
+# Sampling stops after this long, and skips very large tables, so indexing stays quick.
+VALUES_BUDGET_SECONDS = 120
+VALUES_MAX_ROWS = 5_000_000
+
+
+def _quote(kind: str, name: str) -> str:
+    if kind == "mssql":
+        return "[" + name.replace("]", "]]") + "]"
+    if kind in ("mysql", "mariadb"):
+        return "`" + name.replace("`", "``") + "`"
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _values_sql(kind: str, schema: str, table: str, column: str) -> str:
+    source = (_quote(kind, schema) + "." if schema and kind not in ("sqlite", "mysql", "mariadb") else "") + _quote(kind, table)
+    col = _quote(kind, column)
+    limit = COMPLETE_VALUES + 1
+    if kind == "mssql":
+        return f"SELECT TOP {limit} {col} FROM {source} WHERE {col} IS NOT NULL GROUP BY {col} ORDER BY COUNT(*) DESC"
+    return f"SELECT {col} FROM {source} WHERE {col} IS NOT NULL GROUP BY {col} ORDER BY COUNT(*) DESC LIMIT {limit}"
+
+
+def read_values(conn, kind: str, tables: list, meta: dict[str, TableMeta]) -> dict[str, dict]:
+    """{table: {column: {"values": [...], "complete": bool}}} for short text columns. Best effort."""
+    started = time.monotonic()
+    result: dict[str, dict] = {}
+    for table in tables:
+        qualified = table.qualified(kind)
+        rows = meta.get(qualified, TableMeta()).rows
+        if rows is not None and rows > VALUES_MAX_ROWS:
+            continue
+        text_columns = [c for c, t in table.columns if any(word in (t or "").lower() for word in TEXT_TYPES)]
+        for column in text_columns[:TEXT_COLUMNS_PER_TABLE]:
+            if time.monotonic() - started > VALUES_BUDGET_SECONDS:
+                log.info("Stopped sampling column values after %ss", VALUES_BUDGET_SECONDS)
+                return result
+            try:
+                values = [str(r[0]).strip() for r in _rows(conn, _values_sql(kind, table.schema, table.name, column))]
+            except Exception as exc:  # noqa: BLE001 - samples are a bonus
+                log.info("Couldn't sample %s.%s: %s", qualified, column, exc)
+                try:
+                    conn.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
+            short = [v for v in values if v and len(v) <= MAX_VALUE_CHARS]
+            # Free text (notes, descriptions) isn't worth listing.
+            if not short or len(short) < len([v for v in values if v]) / 2:
+                continue
+            complete = len(values) <= COMPLETE_VALUES and len(short) == len([v for v in values if v])
+            result.setdefault(qualified, {})[column] = {
+                "values": short if complete else short[:EXAMPLE_VALUES],
+                "complete": complete,
+            }
+    return result
+
+
+def _values_line(info: dict) -> str:
+    listed = ", ".join("'" + v.replace("'", "''") + "'" for v in info["values"])
+    return f"    values: {listed}" if info["complete"] else f"    most common: {listed}, ..."
+
+
 def _rows_label(rows: int | None) -> str:
     if rows is None:
         return ""
@@ -170,9 +244,12 @@ def describe(source_name: str, kind_label: str, entry: dict, notes: dict, incomi
     if entry.get("primary_key"):
         lines.append("Primary key: " + ", ".join(entry["primary_key"]))
     lines.append("Columns:")
+    values = entry.get("values", {})
     for column, data_type in entry["columns"]:
         note = column_notes.get(column)
         lines.append(f"- {column} ({data_type})" + (f": {note}" if note else ""))
+        if column in values:
+            lines.append(_values_line(values[column]))
     if entry.get("foreign_keys"):
         lines.append("Joins to: " + "; ".join(f"{c} = {t}.{rc}" for c, t, rc in entry["foreign_keys"]))
     if incoming:

@@ -155,6 +155,11 @@ class OpenAISession(ChatSession):
             return StepResult(text, tool_calls, "tool_use", input_tokens, output_tokens)
         return StepResult(text, [], "end", input_tokens, output_tokens)
 
+    accepts_user_messages = True
+
+    def add_user_message(self, text: str) -> None:
+        self.messages.append({"role": "user", "content": text})
+
     def retry_empty(self) -> bool:
         # Some local models emit a malformed tool call that the server discards, leaving
         # an empty reply. Drop it and ask once more.

@@ -139,6 +139,11 @@ class AnthropicSession(ChatSession):
             return StepResult(text, tool_calls, "tool_use", input_tokens, output_tokens)
         return StepResult(text, [], "end", input_tokens, output_tokens)
 
+    accepts_user_messages = True
+
+    def add_user_message(self, text: str) -> None:
+        self.messages.append({"role": "user", "content": text})
+
     def _drop_rejected_effort(self, exc: anthropic.BadRequestError) -> bool:
         """After a 400 about effort, answer without it (the tier named a level the model lacks)."""
         if not (self.sampling and self.sampling.effort and "effort" in str(exc.message).lower()):

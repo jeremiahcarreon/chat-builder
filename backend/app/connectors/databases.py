@@ -5,6 +5,8 @@ offered to the model; queries run live against the database, read-only.
 """
 
 import asyncio
+import difflib
+import re
 import sqlite3
 import time
 import uuid
@@ -13,8 +15,8 @@ from dataclasses import dataclass, field
 from sqlglot import exp
 
 from app.connectors.results import format_results
-from app.connectors.schema import describe, incoming_references, read_metadata
-from app.connectors.sql_safety import DIALECTS, check_select
+from app.connectors.schema import describe, incoming_references, read_metadata, read_values
+from app.connectors.sql_safety import DIALECTS, check_select, referenced_tables
 from app.crypto import decrypt
 from app.db import SessionLocal
 from app.ingest import IngestError
@@ -255,16 +257,17 @@ def test_connection(cs: ConnectionSettings) -> int:
 async def index_database(source: DataSource) -> dict:
     cs = settings_for(source)
 
-    def read_schema() -> tuple[list[TableInfo], dict]:
+    def read_schema() -> tuple[list[TableInfo], dict, dict]:
         conn = connect(cs)
         try:
             tables = list_tables(conn, cs)
-            return tables, read_metadata(conn, source.kind, tables)
+            meta = read_metadata(conn, source.kind, tables)
+            return tables, meta, read_values(conn, source.kind, tables, meta)
         finally:
             conn.close()
 
     try:
-        tables, meta = await asyncio.to_thread(read_schema)
+        tables, meta, values = await asyncio.to_thread(read_schema)
     except ConnectionFailed as exc:
         raise IngestError(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -279,6 +282,7 @@ async def index_database(source: DataSource) -> dict:
             "primary_key": meta[t.qualified(source.kind)].primary_key,
             "foreign_keys": [list(fk) for fk in meta[t.qualified(source.kind)].foreign_keys],
             "rows": meta[t.qualified(source.kind)].rows,
+            "values": values.get(t.qualified(source.kind), {}),
         }
         for t in tables
     ]
@@ -360,7 +364,38 @@ def _check_tables(tree: exp.Expression, source: DataSource, allowed: set[str]) -
             schema = ""
         full = f"{schema}.{name}" if schema else name
         if full not in allowed and not (not schema and name in allowed_names):
-            raise PermissionError(f"Table {full} is not available. Use the tables listed.")
+            close = difflib.get_close_matches(full, sorted(allowed), n=1, cutoff=0.6)
+            hint = f" Did you mean {close[0]}?" if close else ""
+            raise PermissionError(
+                f"Table {full} doesn't exist or isn't available.{hint} Tables you can use: {', '.join(sorted(allowed))}."
+            )
+
+
+class QueryFailed(Exception):
+    """A database error, with a hint the model can act on where possible."""
+
+
+# "Invalid column name 'X'" (SQL Server), 'column "x" does not exist' (Postgres),
+# "Unknown column 'x'" (MySQL), "no such column: x" (SQLite).
+UNKNOWN_COLUMN = re.compile(
+    r"invalid column name '([^']+)'|column \"?([\w.]+)\"? does not exist|unknown column '([^']+)'|no such column: ([\w.]+)",
+    re.IGNORECASE,
+)
+
+
+def _with_column_hint(message: str, tree: exp.Expression, source: DataSource) -> str:
+    """Adds the real columns of the queried tables when the model guessed a column name."""
+    first = message.strip().splitlines()[0] if message.strip() else "Query failed"
+    if not UNKNOWN_COLUMN.search(message):
+        return first
+    queried = {f"{s}.{t}" if s else t for s, t in referenced_tables(tree)}
+    hints = []
+    for entry in source.config.get("schema_cache", []):
+        name = entry["name"].lower()
+        if name in queried or name.rsplit(".", 1)[-1] in queried:
+            columns = ", ".join(c for c, _ in entry["columns"])
+            hints.append(f"{entry['name']} has columns: {columns}.")
+    return " ".join([first, *hints])
 
 
 def run_database_query(source_id: uuid.UUID, sql: str, max_rows: int) -> str:
@@ -382,7 +417,10 @@ def run_database_query(source_id: uuid.UUID, sql: str, max_rows: int) -> str:
         cur = conn.cursor()
         # Run the SQL as regenerated from the validated parse, not the original text, so
         # anything the parser saw differently from the database (comments, odd syntax) is gone.
-        cur.execute(tree.sql(dialect=DIALECTS[source.kind]))
+        try:
+            cur.execute(tree.sql(dialect=DIALECTS[source.kind]))
+        except Exception as exc:
+            raise QueryFailed(_with_column_hint(str(exc), tree, source)) from exc
         columns = [d[0] for d in cur.description or []]
         rows = cur.fetchmany(max_rows + 1)
         cur.close()
