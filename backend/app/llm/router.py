@@ -299,7 +299,7 @@ def better_route(app: ChatApp, floor: int, last_step: int | None) -> Route | Non
 
 def tier_route(app: ChatApp, tier: int) -> Route | None:
     """The first step of one tier (for calibrating the ladder against the test set)."""
-    steps, starts = ladder(tiers_of(app))
+    _, starts = ladder(tiers_of(app))
     if not 0 <= tier < len(starts):
         return None
     return _fixed(app, starts[tier], 0, False, f"Calibration: tier {tier + 1}")

@@ -203,9 +203,10 @@ def read_values(conn, kind: str, tables: list, meta: dict[str, TableMeta]) -> di
             except Exception as exc:  # noqa: BLE001 - samples are a bonus
                 log.info("Couldn't sample %s.%s: %s", qualified, column, exc)
                 try:
+                    # Postgres refuses further statements in a failed transaction.
                     conn.rollback()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as rollback_exc:  # noqa: BLE001
+                    log.info("Rollback after a failed sample: %s", rollback_exc)
                 continue
             short = [v for v in values if v and len(v) <= MAX_VALUE_CHARS]
             # Free text (notes, descriptions) isn't worth listing.

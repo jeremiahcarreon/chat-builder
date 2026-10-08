@@ -15,7 +15,12 @@ from dataclasses import dataclass, field
 from sqlglot import exp
 
 from app.connectors.results import format_results
-from app.connectors.schema import describe, incoming_references, read_metadata, read_values
+from app.connectors.schema import (
+    describe,
+    incoming_references,
+    read_metadata,
+    read_values,
+)
 from app.connectors.sql_safety import DIALECTS, check_select, referenced_tables
 from app.crypto import decrypt
 from app.db import SessionLocal

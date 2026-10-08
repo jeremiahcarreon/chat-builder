@@ -184,7 +184,7 @@ def test_sql_written_instead_of_run_is_picked_up():
     assert written_sql_call(ctx, [SQL_TOOL], fenced).arguments == {"source_id": sid, "sql": "SELECT * FROM dbo.Shipping WHERE PartNo = 'EC797'"}
     inline = StepResult("Run this query: `SELECT PartNo FROM dbo.FitmentCondensed WHERE Make = 'BMW'` to see.")
     assert written_sql_call(ctx, [SQL_TOOL], inline).arguments["sql"].startswith("SELECT PartNo")
-    pasted = StepResult('{"name": "sql_query", "arguments": {"source_id": "%s", "sql": "SELECT 1"}} </tool_call>' % sid)
+    pasted = StepResult(f'{{"name": "sql_query", "arguments": {{"source_id": "{sid}", "sql": "SELECT 1"}}}} </tool_call>')
     assert written_sql_call(ctx, [SQL_TOOL], pasted).arguments == {"source_id": sid, "sql": "SELECT 1"}
     # Real tool calls, no tools offered, or no SQL: nothing to do.
     assert written_sql_call(ctx, [], fenced) is None
