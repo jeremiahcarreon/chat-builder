@@ -6,10 +6,11 @@ database's own catalog (readable by a read-only login). Owners add notes to
 tables and columns, or hide tables entirely. Each visible table becomes one
 embedded description the assistant can find; hidden tables can't be queried.
 
-It also samples the values of short text columns, so the model knows that
-specs are stored as PAName = 'Core Thickness' rather than in a CoreThickness
-column, or that Make is written 'BMW'. Columns with few distinct values are
-listed in full; others get their most common values as examples.
+It also lists the values of short text columns that have only a few distinct
+values, so the model knows that specs are stored as PAName = 'Core Thickness'
+rather than in a CoreThickness column, or that Make is written 'BMW'. Columns
+with many values (part numbers, models) get no examples: models copied example
+part numbers into queries as if they were the answer.
 
 The full catalog is kept in the source's config ("schema_cache"); notes are in
 "table_notes": {table: {"note": str, "hidden": bool, "columns": {column: note}}}.
@@ -159,7 +160,6 @@ def read_metadata(conn, kind: str, tables: list) -> dict[str, TableMeta]:
 TEXT_TYPES = ("char", "text", "string", "varchar", "nvarchar", "nchar", "character", "citext", "enum")
 # A column with at most this many distinct values is listed in full.
 COMPLETE_VALUES = 40
-EXAMPLE_VALUES = 12
 MAX_VALUE_CHARS = 60
 TEXT_COLUMNS_PER_TABLE = 15
 # Sampling stops after this long, and skips very large tables, so indexing stays quick.
@@ -212,17 +212,13 @@ def read_values(conn, kind: str, tables: list, meta: dict[str, TableMeta]) -> di
             # Free text (notes, descriptions) isn't worth listing.
             if not short or len(short) < len([v for v in values if v]) / 2:
                 continue
-            complete = len(values) <= COMPLETE_VALUES and len(short) == len([v for v in values if v])
-            result.setdefault(qualified, {})[column] = {
-                "values": short if complete else short[:EXAMPLE_VALUES],
-                "complete": complete,
-            }
+            if len(values) <= COMPLETE_VALUES and len(short) == len([v for v in values if v]):
+                result.setdefault(qualified, {})[column] = {"values": short, "complete": True}
     return result
 
 
 def _values_line(info: dict) -> str:
-    listed = ", ".join("'" + v.replace("'", "''") + "'" for v in info["values"])
-    return f"    values: {listed}" if info["complete"] else f"    most common: {listed}, ..."
+    return "    values: " + ", ".join("'" + v.replace("'", "''") + "'" for v in info["values"])
 
 
 def _rows_label(rows: int | None) -> str:
@@ -249,7 +245,7 @@ def describe(source_name: str, kind_label: str, entry: dict, notes: dict, incomi
     for column, data_type in entry["columns"]:
         note = column_notes.get(column)
         lines.append(f"- {column} ({data_type})" + (f": {note}" if note else ""))
-        if column in values:
+        if values.get(column, {}).get("complete"):
             lines.append(_values_line(values[column]))
     if entry.get("foreign_keys"):
         lines.append("Joins to: " + "; ".join(f"{c} = {t}.{rc}" for c, t, rc in entry["foreign_keys"]))

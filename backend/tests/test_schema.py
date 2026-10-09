@@ -41,7 +41,8 @@ def test_sampled_values_are_shown_to_the_model():
     }
     text = describe("Catalog", "SQL Server", entry, {}, [])
     assert "    values: 'Core Thickness', 'Core Row Quantity'" in text
-    assert "    most common: 'CC161', 'EC797', ..." in text
+    # Partial samples (like part numbers) are never shown: models copy them into queries.
+    assert "CC161" not in text
 
 
 def test_value_sampling_sql_per_dialect():
