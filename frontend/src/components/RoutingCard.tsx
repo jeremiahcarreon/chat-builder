@@ -8,7 +8,7 @@ const MAX_TIERS = 4;
 // Suggested ladders, cheapest first. Each model starts at its lowest effort.
 const SUGGESTED: Record<string, RouteTier[]> = {
   anthropic: [
-    { provider: "anthropic", model: "claude-haiku-4-5", efforts: [], use_for: "" },
+    { provider: "anthropic", model: "claude-haiku-5-5", efforts: ["low"], use_for: "" },
     { provider: "anthropic", model: "claude-sonnet-5-5", efforts: ["low", "high"], use_for: "" },
     { provider: "anthropic", model: "claude-opus-5-5", efforts: ["low", "high"], use_for: "" },
   ],
