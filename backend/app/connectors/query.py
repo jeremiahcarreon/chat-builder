@@ -70,9 +70,13 @@ def relevant_tables(app_id: uuid.UUID, query_vector: list[float]) -> list[str]:
             .join(DataSource, DataSource.id == SchemaDoc.source_id)
             .where(SchemaDoc.app_id == app_id, DataSource.status == "ready")
         )
-        if closest is None or closest > MAX_TABLE_DISTANCE:
+        if closest is None:
             return []
         total = db.scalar(select(func.count()).select_from(ready.subquery()))
+        # A few tables are always all listed: wording like "which gives the most cooling?"
+        # can look unlike every table description yet still need the data.
+        if total > LIST_ALL_BELOW and closest > MAX_TABLE_DISTANCE:
+            return []
         if total <= LIST_ALL_BELOW:
             rows = db.execute(ready.order_by(SchemaDoc.source_id, SchemaDoc.table_name)).all()
         else:

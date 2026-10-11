@@ -21,13 +21,19 @@ def messages_last_minute(app_id: uuid.UUID, user_id: uuid.UUID | None, visitor_i
         )
 
 
+# Owner-run work (test runs, calibration, satisfaction reviews) doesn't count toward the
+# daily limit, which protects against heavy chat use; a calibration once used up a whole
+# day's allowance and locked people out of the app.
+NOT_LIMITED = ("test", "review")
+
+
 def tokens_today(app_id: uuid.UUID) -> int:
-    """Tokens used since midnight UTC, across the classifier and the main model."""
+    """Chat tokens used since midnight UTC: the main model, the classifier and the router."""
     midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     with SessionLocal() as db:
         return db.scalar(
             select(func.coalesce(func.sum(UsageEvent.input_tokens + UsageEvent.output_tokens), 0)).where(
-                UsageEvent.app_id == app_id, UsageEvent.created_at >= midnight
+                UsageEvent.app_id == app_id, UsageEvent.created_at >= midnight, UsageEvent.kind.not_in(NOT_LIMITED)
             )
         )
 

@@ -79,15 +79,17 @@ async def gather(app: ChatApp, question: str, history: list[tuple[str, str]]) ->
 
 
 def tools_for(ctx: TurnContext) -> list[ToolSpec]:
-    # Offered only when this turn has relevant tables to query.
-    if not ctx.queryable or not ctx.table_descriptions:
+    if not ctx.queryable:
         return []
     from app.connectors.explore import EXPLORE_TOOLS
     from app.connectors.query import SQL_TOOL
 
     # Exploration only helps for connected databases, which can have hundreds of tables.
     databases = any(kind not in ("spreadsheet",) for kind, _ in ctx.queryable.values())
-    return [SQL_TOOL, *EXPLORE_TOOLS] if databases else [SQL_TOOL]
+    if databases:
+        # Even when no table looks relevant, the model can still search for one.
+        return [SQL_TOOL, *EXPLORE_TOOLS]
+    return [SQL_TOOL] if ctx.table_descriptions else []
 
 
 def describe_call(ctx: TurnContext, call: ToolCall) -> str:

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import Date, cast, func, select
 
 from app.deps import AdminUser, DbSession
+from app.guardrails.limits import NOT_LIMITED
 from app.pricing import cost, load_custom, price_for
 from app.pricing import key as price_key
 from app.models import ChatApp, Conversation, Message, UsageEvent
@@ -120,7 +121,8 @@ def usage_report(db: DbSession, user: AdminUser, days: int = Query(30, ge=1, le=
     today_by_app = dict(
         db.execute(
             select(events.c.app_id, func.sum(events.c.input_tokens + events.c.output_tokens))
-            .where(events.c.created_at >= midnight)
+            # Counted the same way as the daily limit.
+            .where(events.c.created_at >= midnight, events.c.kind.not_in(NOT_LIMITED))
             .group_by(events.c.app_id)
         ).all()
     )
