@@ -357,6 +357,8 @@ export interface RatedAnswer {
   test_case_id: string | null;
   // Set when the person asked for a better answer: the model that gave it.
   better_answer_by: string | null;
+  // API drafts that staff edited: what was actually sent.
+  final_text: string | null;
 }
 
 export interface Calibration {

@@ -457,6 +457,12 @@ function Feedback({ base }: { base: string }) {
               </div>
               <div className="mt-1 font-medium">{r.question}</div>
               {r.feedback && <div className="mt-1 rounded bg-amber-50 px-2 py-1 text-amber-900">“{r.feedback}”</div>}
+              {r.final_text && (
+                <details className="mt-1">
+                  <summary className="cursor-pointer text-xs text-slate-500">What staff sent instead</summary>
+                  <div className="mt-1 whitespace-pre-wrap rounded bg-emerald-50 p-2 text-emerald-900">{r.final_text}</div>
+                </details>
+              )}
               <details className="mt-1">
                 <summary className="cursor-pointer text-xs text-slate-500">Answer</summary>
                 <div className="prose-chat mt-1 rounded bg-slate-50 p-2">

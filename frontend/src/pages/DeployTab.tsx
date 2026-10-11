@@ -159,7 +159,159 @@ export function DeployTab({ appId }: { appId: string }) {
           {data.auth === "signed" && <SignedSetup appId={appId} hasSecret={data.has_secret} />}
         </>
       )}
+      {data && <ApiAccess appId={appId} base={data.script_url.split("/embed/")[0]} />}
     </div>
+  );
+}
+
+interface ApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  key?: string;
+}
+
+/** API keys for other systems (like the ERP), with examples of calling the app. */
+function ApiAccess({ appId, base }: { appId: string; base: string }) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const [created, setCreated] = useState<ApiKey | null>(null);
+  const { data: keys } = useQuery({ queryKey: ["api-keys", appId], queryFn: () => api<ApiKey[]>(`/api/apps/${appId}/api-keys`) });
+  const create = useMutation({
+    mutationFn: () => api<ApiKey>(`/api/apps/${appId}/api-keys`, { method: "POST", body: JSON.stringify({ name }) }),
+    onSuccess: (key) => {
+      setCreated(key);
+      setName("");
+      queryClient.invalidateQueries({ queryKey: ["api-keys", appId] });
+    },
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api(`/api/apps/${appId}/api-keys/${id}`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["api-keys", appId] }),
+  });
+
+  const answerUrl = `${base}/api/v1/apps/${appId}/answer`;
+  const curl = `curl -X POST ${answerUrl} \\
+  -H "Authorization: Bearer $CHAT_BUILDER_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"message": "Do you have a thinner core for a 1976 BMW 2002?", "thread_id": "ebay-12345"}'`;
+  const response = `{
+  "answer": "Yes. EC797 (2 row) has a 1.5 inch core...",
+  "blocked": false,
+  "message_id": 812,
+  "conversation_id": "…",
+  "thread_id": "ebay-12345",
+  "model": "anthropic/claude-haiku-5-5",
+  "effort": "low",
+  "lookups": ["Querying Catalog"]
+}`;
+  const laravel = `// app/Jobs/DraftEbayReply.php: queued whenever an eBay message arrives
+$response = Http::withToken(config('services.chat_builder.key'))
+    ->timeout(120)                      // answers that query data can take a while
+    ->retry(2, 5000, throw: false)
+    ->post('${answerUrl}', [
+        'message'   => $message->body,
+        'thread_id' => 'ebay-' . $message->thread_id,   // follow-ups share context
+    ]);
+
+if ($response->successful() && ! $response->json('blocked')) {
+    $message->update([
+        'draft_reply'      => $response->json('answer'),
+        'draft_message_id' => $response->json('message_id'),
+    ]);
+}
+
+// When staff send the reply, report what they did with the draft:
+Http::withToken(config('services.chat_builder.key'))
+    ->post('${base}/api/v1/apps/${appId}/messages/' . $message->draft_message_id . '/outcome', [
+        'outcome'    => $sentText === $message->draft_reply ? 'sent' : 'edited',  // or 'discarded'
+        'final_text' => $sentText,
+    ]);`;
+
+  return (
+    <Card
+      title="API"
+      description="Let another system ask this app questions, like your ERP drafting replies to eBay messages for staff to check and send. Answers use the same data, guardrails and model choice as the chat."
+    >
+      <div className="space-y-5 text-sm">
+        <div className="space-y-2">
+          <div className="font-medium">API keys</div>
+          {keys && keys.length > 0 ? (
+            <ul className="divide-y divide-slate-200 rounded-md border border-slate-200">
+              {keys.map((k) => (
+                <li key={k.id} className="flex items-center gap-3 px-3 py-2">
+                  <span className="font-medium">{k.name}</span>
+                  <code className="text-xs text-slate-500">{k.prefix}…</code>
+                  <span className="ml-auto text-xs text-slate-500">
+                    {k.last_used_at ? `Last used ${new Date(k.last_used_at).toLocaleString()}` : "Never used"}
+                  </span>
+                  <button
+                    onClick={() => confirm(`Delete the key "${k.name}"? Anything using it stops working immediately.`) && remove.mutate(k.id)}
+                    className="text-xs text-red-700 hover:underline"
+                  >
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-slate-500">No keys yet.</p>
+          )}
+          {created?.key && (
+            <div className="space-y-1 rounded-md border border-amber-200 bg-amber-50 p-3">
+              <p className="text-amber-900">
+                Copy this key now and keep it on your server. It won't be shown again.
+              </p>
+              <div className="flex gap-2">
+                <code className="flex-1 overflow-x-auto rounded-md border border-slate-300 bg-white px-3 py-2">{created.key}</code>
+                <CopyButton text={created.key} />
+              </div>
+            </div>
+          )}
+          <form
+            className="flex gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (name.trim()) create.mutate();
+            }}
+          >
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={200}
+              placeholder="Key name, like ERP eBay drafts"
+              className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500"
+            />
+            <Button type="submit" variant="secondary" disabled={!name.trim() || create.isPending}>
+              Create key
+            </Button>
+          </form>
+          {create.error && <p className="text-red-600">{create.error.message}</p>}
+        </div>
+
+        <div className="space-y-2">
+          <div className="font-medium">Ask a question</div>
+          <p className="text-slate-500">
+            Send the same <code>thread_id</code> for follow-up messages in one conversation, so the answer has context.
+            Messages the guardrails refuse come back with <code>"blocked": true</code>.
+          </p>
+          <Code>{curl}</Code>
+          <Code>{response}</Code>
+        </div>
+
+        <div className="space-y-2">
+          <div className="font-medium">Laravel background job</div>
+          <Code>{laravel}</Code>
+          <p className="text-slate-500">
+            Reporting the outcome is optional but worth it: the Quality tab then shows how often drafts go out unchanged,
+            and an edited reply becomes the reference answer when you turn it into a test. Each key counts toward the app's
+            messages-per-minute limit on its own; raise that limit in Settings if the ERP sends bursts.
+          </p>
+        </div>
+      </div>
+    </Card>
   );
 }
 

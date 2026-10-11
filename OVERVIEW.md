@@ -276,6 +276,25 @@ only accepts sign-in messages from them.
 Widget sessions are bearer tokens of a separate kind: they work only for
 chatting with that one app, never for the dashboard (even for admins).
 
+### API for other systems
+- An admin creates **API keys** for one app in its Deploy tab. A key is shown
+  once, stored as a hash, and reaches only that app's API (never the dashboard,
+  other apps or settings). Deleting it stops it immediately.
+- `POST /api/v1/apps/{app}/answer` with `{"message", "thread_id"}` returns a
+  drafted answer as JSON (answer, blocked, message_id, model, effort, lookups).
+  It runs the same guardrails, data queries and automatic model choice as the
+  chat. Messages with the same `thread_id` (an eBay thread, a ticket) continue
+  one conversation. Guardrail refusals return `blocked: true`; rate limits 429;
+  provider failures 502.
+- `POST /api/v1/apps/{app}/messages/{id}/outcome` with `sent`, `edited` (plus
+  `final_text`) or `discarded` records what staff did with the draft. It shows
+  as feedback in the Quality tab, and an edited reply becomes the reference
+  answer when the answer is turned into a test.
+- Built for the ERP: a queued job drafts a reply for each incoming eBay
+  message, and staff check and send it.
+
+---
+
 ## 9. Chat App Settings
 
 - **Basics:** name, description, welcome message
