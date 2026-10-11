@@ -1,9 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Database, FileSpreadsheet, FileText, Loader2, Pencil, RefreshCw, Table2, Trash2 } from "lucide-react";
+import { Database, FileSpreadsheet, FileText, Loader2, Pencil, Plug, RefreshCw, Table2, Trash2, Wrench } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { api, type DataSource } from "../api";
 import { DatabaseForm, SERVER_KINDS } from "./DatabaseForm";
+import { McpForm, McpToolsPanel } from "./McpForm";
 import { TablesPanel } from "./TablesPanel";
 
 const KIND_LABELS: Record<string, string> = {
@@ -14,11 +15,13 @@ const KIND_LABELS: Record<string, string> = {
   mysql: "MySQL",
   mariadb: "MariaDB",
   postgres: "PostgreSQL",
+  mcp: "MCP server",
 };
 
 function KindIcon({ kind }: { kind: string }) {
   if (kind === "file") return <FileText size={18} className="text-slate-500" />;
   if (kind === "spreadsheet") return <FileSpreadsheet size={18} className="text-emerald-600" />;
+  if (kind === "mcp") return <Plug size={18} className="text-violet-600" />;
   return <Database size={18} className="text-sky-600" />;
 }
 
@@ -46,6 +49,8 @@ function fileSize(bytes: number): string {
 function summary(source: DataSource): string {
   const d = source.details;
   const parts: string[] = [KIND_LABELS[source.kind] ?? source.kind];
+  if (d.url) parts.push(String(d.url));
+  if (typeof d.tool_count === "number") parts.push(`${d.enabled_count ?? 0} of ${d.tool_count} tools on`);
   if (d.host) parts.push(`${d.host}${d.port ? `:${d.port}` : ""}${d.database ? ` / ${d.database}` : ""}`);
   if (typeof d.size === "number") parts.push(fileSize(d.size));
   if (d.page_count) parts.push(`${d.page_count} page${d.page_count === 1 ? "" : "s"}`);
@@ -101,10 +106,13 @@ export function SourceList({ sources, showApp = false }: { sources: DataSource[]
             </div>
             {source.error && <div className="mt-1 text-xs text-red-600">{source.error}</div>}
             {source.kind === "file" && <SkuTags source={source} onSaved={refresh} />}
-            {editing === source.id && (
-              <DatabaseForm appId={source.app_id} existing={source} onDone={() => setEditing(null)} />
-            )}
-            {tables === source.id && <TablesPanel sourceId={source.id} />}
+            {editing === source.id &&
+              (source.kind === "mcp" ? (
+                <McpForm appId={source.app_id} existing={source} onDone={() => setEditing(null)} />
+              ) : (
+                <DatabaseForm appId={source.app_id} existing={source} onDone={() => setEditing(null)} />
+              ))}
+            {tables === source.id && (source.kind === "mcp" ? <McpToolsPanel sourceId={source.id} /> : <TablesPanel sourceId={source.id} />)}
           </div>
           <div className="flex gap-1">
             {(SERVER_KINDS.has(source.kind) || source.kind === "sqlite") && source.status === "ready" && (
@@ -116,7 +124,16 @@ export function SourceList({ sources, showApp = false }: { sources: DataSource[]
                 <Table2 size={15} />
               </button>
             )}
-            {SERVER_KINDS.has(source.kind) && (
+            {source.kind === "mcp" && source.status === "ready" && (
+              <button
+                onClick={() => setTables(tables === source.id ? null : source.id)}
+                className="rounded p-1.5 text-slate-500 hover:bg-slate-100"
+                title="Tools the assistant may use"
+              >
+                <Wrench size={15} />
+              </button>
+            )}
+            {(SERVER_KINDS.has(source.kind) || source.kind === "mcp") && (
               <button
                 onClick={() => setEditing(editing === source.id ? null : source.id)}
                 className="rounded p-1.5 text-slate-500 hover:bg-slate-100"
@@ -128,7 +145,13 @@ export function SourceList({ sources, showApp = false }: { sources: DataSource[]
             <button
               onClick={() => reprocess.mutate(source.id)}
               className="rounded p-1.5 text-slate-500 hover:bg-slate-100"
-              title={source.kind === "file" || source.kind === "spreadsheet" ? "Process again" : "Re-read schema"}
+              title={
+                source.kind === "file" || source.kind === "spreadsheet"
+                  ? "Process again"
+                  : source.kind === "mcp"
+                    ? "Re-read tools"
+                    : "Re-read schema"
+              }
             >
               <RefreshCw size={15} />
             </button>

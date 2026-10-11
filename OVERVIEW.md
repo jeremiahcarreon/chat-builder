@@ -276,6 +276,17 @@ only accepts sign-in messages from them.
 Widget sessions are bearer tokens of a separate kind: they work only for
 chatting with that one app, never for the dashboard (even for admins).
 
+### Connected systems (MCP)
+- A data source can be an **MCP server**, like the ERP's: URL plus an optional
+  bearer token (stored encrypted). Processing lists its tools; read-only tools
+  are on by default, and tools that may change data stay off until an admin
+  turns them on. The model sees allowed tools as `<source>__<tool>` next to
+  `sql_query`, and Try it shows each lookup.
+- The API's `context` (like `{"ebay_buyer": "sample_buyer"}`) stays with the
+  thread, is shown to the model, and is sent with each tool call in `_meta`
+  under `chat-builder/context`, so the server can return only that person's
+  records. See docs/mcp-servers.md for what a server needs.
+
 ### API for other systems
 - An admin creates **API keys** for one app in its Deploy tab. A key is shown
   once, stored as a hash, and reaches only that app's API (never the dashboard,

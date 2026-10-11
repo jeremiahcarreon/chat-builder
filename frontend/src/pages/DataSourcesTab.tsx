@@ -3,6 +3,7 @@ import { Upload } from "lucide-react";
 import { useRef, useState, type DragEvent } from "react";
 import { api, uploadFiles, type DataSource } from "../api";
 import { DatabaseForm } from "../components/DatabaseForm";
+import { McpForm } from "../components/McpForm";
 import { isBusy, SourceList } from "../components/SourceList";
 import { Card } from "../components/ui";
 
@@ -77,6 +78,8 @@ export function DataSourcesTab({ appId }: { appId: string }) {
       </Card>
 
       <DatabaseForm appId={appId} />
+
+      <McpForm appId={appId} />
 
       <Card title="This app's data sources">
         <SourceList sources={sources ?? []} />

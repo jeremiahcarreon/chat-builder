@@ -196,7 +196,7 @@ function ApiAccess({ appId, base }: { appId: string; base: string }) {
   const curl = `curl -X POST ${answerUrl} \\
   -H "Authorization: Bearer $CHAT_BUILDER_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{"message": "Do you have a thinner core for a 1976 BMW 2002?", "thread_id": "ebay-12345"}'`;
+  -d '{"message": "Where is my order?", "thread_id": "ebay-12345", "context": {"ebay_buyer": "sample_buyer"}}'`;
   const response = `{
   "answer": "Yes. EC797 (2 row) has a 1.5 inch core...",
   "blocked": false,
@@ -214,6 +214,7 @@ $response = Http::withToken(config('services.chat_builder.key'))
     ->post('${answerUrl}', [
         'message'   => $message->body,
         'thread_id' => 'ebay-' . $message->thread_id,   // follow-ups share context
+        'context'   => ['ebay_buyer' => $message->buyer_username],  // who is asking
     ]);
 
 if ($response->successful() && ! $response->json('blocked')) {
@@ -295,7 +296,9 @@ Http::withToken(config('services.chat_builder.key'))
           <div className="font-medium">Ask a question</div>
           <p className="text-slate-500">
             Send the same <code>thread_id</code> for follow-up messages in one conversation, so the answer has context.
-            Messages the guardrails refuse come back with <code>"blocked": true</code>.
+            Messages the guardrails refuse come back with <code>"blocked": true</code>. The optional <code>context</code>{" "}
+            says who is asking: the model sees it, and it's sent to the app's MCP servers (in the request's{" "}
+            <code>_meta</code> as <code>chat-builder/context</code>) so they can return only that person's records.
           </p>
           <Code>{curl}</Code>
           <Code>{response}</Code>
