@@ -285,6 +285,9 @@ class Conversation(Base):
     # Conversations started through the API: the caller's own thread ID (like an eBay
     # conversation), so later messages in that thread continue this conversation.
     external_id: Mapped[str | None] = mapped_column(String(200))
+    # What the calling system said about who is asking (like {"ebay_buyer": "sample_buyer"}).
+    # Shown to the model and sent with MCP tool calls, so servers can limit what they return.
+    context: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}", nullable=False)
     # Automatic model choice: the lowest step this conversation may use, raised when
     # the person wasn't satisfied with an answer.
     route_floor: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)

@@ -32,6 +32,7 @@ dependencies = [
     "opencv-python-headless>=5.0.0.93",
     "typesafe-sdk>=0.7.2",
     "pyjwt>=2.15.1",
+    "mcp>=2.3.0",
 ]
 
 [dependency-groups]

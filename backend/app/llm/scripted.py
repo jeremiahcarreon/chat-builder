@@ -6,6 +6,8 @@ no API keys:
 
 - A message containing a line "SQL: <query>" makes it call sql_query with that
   query on the first source in <available_tables>, then reply with the result.
+- A line "TOOL: <name> {json}" calls the offered tool whose name ends in
+  "__<name>" (an MCP tool) with those arguments, then replies with the result.
 - Any other message gets "[<model> <effort>] " followed by the first retrieved excerpt
   (or "no excerpts"), so tests can see which model answered and what retrieval found.
 - As a classifier it picks the first topic after greetings, and flags
@@ -29,6 +31,7 @@ from app.llm.base import (
 )
 
 SQL_LINE = re.compile(r"^SQL:\s*(.+)$", re.MULTILINE)
+TOOL_LINE = re.compile(r"^TOOL:\s*(\S+)\s*(\{.*\})?\s*$", re.MULTILINE)
 SOURCE_ID = re.compile(r"source_id: ([0-9a-f-]{36})")
 EXCERPT = re.compile(r"<excerpt[^>]*>\n(.*?)\n</excerpt>", re.DOTALL)
 QUESTION = re.compile(r"<question>\n(.*)\n</question>", re.DOTALL)
@@ -54,6 +57,12 @@ class ScriptedSession(ChatSession):
         question = (QUESTION.search(self.turn) or [None, self.turn])[1]
         sql = SQL_LINE.search(question)
         source = SOURCE_ID.search(self.turn)
+        wanted = TOOL_LINE.search(question)
+        tool = next((t for t in tools if wanted and t.name.endswith("__" + wanted[1])), None)
+        if tool and not self.called:
+            self.called = True
+            call = ToolCall(f"call_{uuid.uuid4().hex[:8]}", tool.name, json.loads(wanted[2] or "{}"))
+            return StepResult("", [call], "tool_use", _tokens(self.turn), 20)
         if sql and source and not self.called and any(t.name == "sql_query" for t in tools):
             self.called = True
             call = ToolCall(f"call_{uuid.uuid4().hex[:8]}", "sql_query", {"source_id": source[1], "sql": sql[1].strip()})

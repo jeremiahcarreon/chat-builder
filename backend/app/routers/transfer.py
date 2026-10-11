@@ -26,6 +26,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.connectors.databases import SERVER_KINDS
 from app.connectors.databases import secret_context as db_secret_context
+from app.connectors.mcp import secret_context as mcp_secret_context
 from app.crypto import decrypt, encrypt
 from app.deps import AdminUser, DbSession
 from app.evals.versions import current_version
@@ -74,6 +75,10 @@ def export_app(app_id: uuid.UUID, db: DbSession, user: AdminUser, include_secret
                 entry["connection"] = {k: source.config[k] for k in DATABASE_SETTINGS if k in source.config and k != "path"}
                 if include_secrets and source.encrypted_secret:
                     entry["password"] = decrypt(source.encrypted_secret, db_secret_context(source.id))
+            if source.kind == "mcp":
+                entry["mcp"] = {"url": source.config.get("url", ""), "enabled": source.config.get("enabled", [])}
+                if include_secrets and source.encrypted_secret:
+                    entry["token"] = decrypt(source.encrypted_secret, mcp_secret_context(source.id))
             if source.kind == "file":
                 entry["skus"] = source.config.get("skus", [])
             path = source.config.get("path")
@@ -191,6 +196,16 @@ async def import_app(file: UploadFile, db: DbSession, user: AdminUser) -> dict:
                 source.status = "failed"
                 source.error = "Imported without its password. Edit the connection to enter it."
                 needs_password.append(source.name)
+        elif kind == "mcp":
+            settings = entry.get("mcp") or {}
+            url = str(settings.get("url") or "")
+            if not url.lower().startswith(("http://", "https://")):
+                continue
+            # The tool choices are kept; processing re-lists the server's tools.
+            source.config = {"url": url, "imported_enabled": [str(n) for n in settings.get("enabled", [])]}
+            if entry.get("token"):
+                source.encrypted_secret = encrypt(str(entry["token"]), mcp_secret_context(source.id))
+            to_ingest.append(source.id)
         else:
             continue
         db.add(source)

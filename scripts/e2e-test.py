@@ -163,6 +163,8 @@ def main() -> int:
     parser.add_argument("--erp-host", default="localhost", help="the sample ERP database, as the server reaches it")
     parser.add_argument("--erp-port", type=int, default=5432)
     parser.add_argument("--keep", action="store_true", help="keep the apps and people created")
+    parser.add_argument("--mcp-url", help="scripts/mock-erp-mcp.py's address as the server reaches it, like http://host:8931/mcp")
+    parser.add_argument("--mcp-token", default="test-token")
     args = parser.parse_args()
 
     admin = Client(args.base)
@@ -394,6 +396,36 @@ def main() -> int:
         admin.json("DELETE", f"/api/apps/{app_id}/api-keys/{created['id']}")
         status, _, _ = erp.request("POST", f"/api/v1/apps/{app_id}/answer", {"message": "Hi"})
         check(status == 401, "a deleted key stops working immediately")
+
+        if args.mcp_url:
+            step("MCP server (a mock ERP)")
+            mcp = {"name": "Mock ERP", "url": args.mcp_url, "token": "wrong-token"}
+            tested = admin.json("POST", f"/api/apps/{app_id}/sources/mcp/test", mcp)
+            check(not tested["ok"] and "rejected the token" in tested["message"], "a wrong token is reported clearly", tested)
+            tested = admin.json("POST", f"/api/apps/{app_id}/sources/mcp/test", {**mcp, "token": args.mcp_token})
+            check(tested["ok"] and len(tested["tools"]) == 5, f"the server's tools were listed ({tested['message']})", tested)
+            source = admin.json("POST", f"/api/apps/{app_id}/sources/mcp", {**mcp, "token": args.mcp_token})
+            wait_until_ready(admin, app_id, "Mock ERP")
+            tools = {t["name"]: t for t in admin.json("GET", f"/api/sources/{source['id']}/mcp/tools")}
+            check(tools["find_order"]["enabled"] and tools["find_order"]["read_only"], "read-only tools are on by default", tools)
+            check(not tools["cancel_order"]["enabled"] and not tools["cancel_order"]["read_only"], "a tool that changes data starts off", tools)
+            answer = admin.chat(app_id, 'Where is order SO-1001?\nTOOL: find_order {"order_number": "SO-1001"}')
+            check("Valley Mechanical" in answer["text"] and answer["tools"], "the model looked up an order through MCP", answer)
+            answer = admin.chat(app_id, 'Cancel order SO-1001.\nTOOL: cancel_order {"order_number": "SO-1001"}')
+            check("Cancelled" not in answer["text"], "a tool that's off can't be called", answer)
+            key = admin.json("POST", f"/api/apps/{app_id}/api-keys", {"name": "MCP test"})
+            erp = Client(args.base, bearer=key["key"])
+            other_buyer = erp.json("POST", f"/api/v1/apps/{app_id}/answer", {
+                "message": 'Where is my order SO-1001?\nTOOL: find_order {"order_number": "SO-1001"}',
+                "thread_id": f"ebay-mcp-{RUN}", "context": {"ebay_buyer": "coastal_air"},
+            })
+            check("doesn't belong to this buyer" in other_buyer["answer"], "the MCP server saw who was asking and refused another buyer's order", other_buyer)
+            follow = erp.json("POST", f"/api/v1/apps/{app_id}/answer", {"message": "What do you know about me?\nTOOL: show_context", "thread_id": f"ebay-mcp-{RUN}"})
+            check("coastal_air" in follow["answer"], "the thread kept its context for follow-up tool calls", follow)
+            admin.json("DELETE", f"/api/apps/{app_id}/api-keys/{key['id']}")
+            admin.json("PUT", f"/api/sources/{source['id']}/mcp/tools", {"enabled": []})
+            answer = admin.chat(app_id, 'Where is order SO-1001?\nTOOL: find_order {"order_number": "SO-1001"}')
+            check("Valley Mechanical" not in answer["text"], "turning a tool off takes effect immediately", answer)
 
         step("Export and import")
         status, _, exported = admin.request("GET", f"/api/apps/{app_id}/export")

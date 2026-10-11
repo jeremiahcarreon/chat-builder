@@ -60,6 +60,8 @@ class ChatRequest:
     better_than: int | None = None
     # API calls: the caller's thread ID. Messages with the same ID share a conversation.
     external_id: str | None = None
+    # API calls: who is asking, as the calling system knows them (kept on the conversation).
+    context: dict | None = None
 
 
 @dataclass
@@ -83,6 +85,7 @@ class Prepared:
     # The question being answered, and the answer this one replaces (if any).
     question: str = ""
     replaces: int | None = None
+    call_context: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -153,6 +156,9 @@ def _prepare(req: ChatRequest) -> Prepared:
             )
             db.add(conversation)
             db.flush()
+        if req.context:
+            # The latest call's context wins (a thread can learn more about the person).
+            conversation.context = {**(conversation.context or {}), **req.context}
 
         user_msg = Message(conversation_id=conversation.id, role="user", content=req.message, meta={})
         db.add(user_msg)
@@ -204,6 +210,7 @@ def _prepared(db, app: ChatApp, conversation: Conversation, user_msg: Message, l
         user_message_id=user_msg.id,
         history=history_for(db, conversation.id, user_msg.id),
         question=user_msg.content,
+        call_context=dict(conversation.context or {}),
     )
     prepared.provider, prepared.model = chat_model_for(app, load_cloud_switch(db, app.owner_id))
     prepared.prompt_version_id = current_version(db, app).id
@@ -380,7 +387,8 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
     async def converse() -> None:
         try:
             await generate(
-                app, prep.client, prep.provider, prep.model, prep.history, question, gen, queue.put, effort=prep.effort
+                app, prep.client, prep.provider, prep.model, prep.history, question, gen, queue.put,
+                effort=prep.effort, call_context=prep.call_context,
             )
         finally:
             prep.usage.extend(gen.usage)
@@ -422,21 +430,27 @@ async def generate(
     emit,
     usage_kind: str = "chat",
     effort: str | None = None,
+    call_context: dict | None = None,
 ) -> Generation:
     """Answers one question: retrieval, the model call, and any data queries it makes.
 
     Shared by live chat (which streams events through `emit`) and test runs.
     Errors are recorded in gen.meta["error"] rather than raised.
     """
-    ctx = await context_module.gather(app, question, history)
+    ctx = await context_module.gather(app, question, history, call_context)
     tools = context_module.tools_for(ctx)
     gen.meta.setdefault("tool_calls", [])
     gen.meta["sources"] = ctx.source_names
     session = client.session(
         model=model,
-        system=build_system_prompt(app, ctx.has_documents, bool(tools)),
+        system=build_system_prompt(
+            app,
+            ctx.has_documents,
+            data_tools=any(t.name == "sql_query" for t in tools),
+            connected_tools=bool(ctx.mcp_tools or ctx.call_context),
+        ),
         history=history,
-        user_message=build_user_turn(question, ctx.excerpts, ctx.table_descriptions),
+        user_message=build_user_turn(question, ctx.excerpts, ctx.table_descriptions, ctx.call_context),
         max_tokens=app.max_answer_tokens,
         sampling=Sampling(app.temperature, app.seed, effort),
     )

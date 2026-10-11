@@ -26,7 +26,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from app.db import SessionLocal
@@ -127,6 +127,19 @@ class AnswerIn(BaseModel):
     message: str = Field(min_length=1, max_length=8_000)
     # Your own ID for the conversation (an eBay thread, a ticket). Same ID, same conversation.
     thread_id: str | None = Field(default=None, min_length=1, max_length=200)
+    # Who is asking, as your system knows them, like {"ebay_buyer": "sample_buyer"}. Shown to the
+    # model and sent to the app's MCP servers, which can limit lookups to this person.
+    context: dict[str, str] | None = Field(default=None, max_length=20)
+
+    @field_validator("context")
+    @classmethod
+    def _short_context(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if value is None:
+            return None
+        for key, item in value.items():
+            if not key.strip() or len(key) > 50 or len(item) > 500:
+                raise ValueError("Context keys can be up to 50 characters and values up to 500")
+        return {key.strip(): item.strip() for key, item in value.items()}
 
 
 class AnswerOut(BaseModel):
@@ -152,6 +165,7 @@ async def answer(app_id: uuid.UUID, body: AnswerIn, key: ApiKey, db: DbSession):
         # Rate limits count per key.
         visitor_id=f"api:{key.id}",
         external_id=body.thread_id,
+        context=body.context,
     )
     db.close()
     text, blocked, error = "", None, None

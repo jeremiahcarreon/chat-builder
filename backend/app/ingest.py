@@ -84,6 +84,10 @@ async def ingest_source(source_id: uuid.UUID) -> None:
             from app.connectors.spreadsheets import ingest_spreadsheet
 
             stats = await ingest_spreadsheet(source)
+        elif source.kind == "mcp":
+            from app.connectors.mcp import index_mcp
+
+            stats = await index_mcp(source)
         else:
             from app.connectors.databases import DATABASE_KINDS, index_database
 

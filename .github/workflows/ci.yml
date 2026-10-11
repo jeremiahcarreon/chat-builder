@@ -144,13 +144,19 @@ jobs:
       - name: Smoke test
         run: scripts/smoke-test.sh http://localhost:8080 "$ADMIN_EMAIL" "$ADMIN_PASSWORD"
 
+      - uses: astral-sh/setup-uv@v6
+
       - name: End-to-end tests
-        # Chats, a live database, the widget's signed sign-in, people and export/import,
-        # with scripted stand-in models (TEST_MODELS=true above).
+        # Chats, a live database, an MCP server, the widget's signed sign-in, people, the API and
+        # export/import, with scripted stand-in models (TEST_MODELS=true above).
         run: |
           compose="docker compose --project-directory $CB_HOME -f $CB_HOME/docker-compose.yml --env-file $CB_HOME/.env"
           $compose exec -T postgres psql -U chatbuilder -d chatbuilder -v ON_ERROR_STOP=1 -q < scripts/e2e-erp.sql
-          scripts/e2e-test.py http://localhost:8080 "$ADMIN_EMAIL" "$ADMIN_PASSWORD" --erp-host postgres --erp-port 5432
+          # A mock ERP MCP server on the runner, reached from the containers through host.docker.internal.
+          uv run --no-project --with mcp --with uvicorn scripts/mock-erp-mcp.py --port 8931 --token test-token &
+          for _ in $(seq 1 30); do curl -s -o /dev/null http://localhost:8931/mcp && break; sleep 1; done
+          scripts/e2e-test.py http://localhost:8080 "$ADMIN_EMAIL" "$ADMIN_PASSWORD" --erp-host postgres --erp-port 5432 \
+            --mcp-url http://host.docker.internal:8931/mcp --mcp-token test-token
 
       - name: Full backup and restore round trip
         env:

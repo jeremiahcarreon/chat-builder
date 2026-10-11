@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from app.config import get_settings
@@ -42,7 +42,7 @@ class SourceOut(BaseModel):
 PUBLIC_CONFIG = {
     "filename", "size", "chunk_count", "page_count", "table_count", "row_count",
     "host", "port", "database", "username", "encryption", "require_tls", "schemas",
-    "query_timeout", "dirty_reads", "hidden_count", "skus",
+    "query_timeout", "dirty_reads", "hidden_count", "skus", "url", "tool_count", "enabled_count",
 }
 
 
@@ -327,6 +327,138 @@ async def update_database(
     db.commit()
     await queue_ingest(source.id)
     return source_out(source)
+
+
+# ------------------------------------------------------------ MCP servers
+
+
+class McpIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=1, max_length=2000)
+    # Leave empty when editing to keep the saved token.
+    token: str = Field(default="", max_length=4000)
+
+    @field_validator("url")
+    @classmethod
+    def _http_url(cls, value: str) -> str:
+        value = value.strip()
+        if not value.lower().startswith(("http://", "https://")):
+            raise ValueError("Use the server's http:// or https:// address, like https://erp.example.com/mcp")
+        return value
+
+
+class McpToolOut(BaseModel):
+    name: str
+    title: str
+    description: str
+    read_only: bool
+    enabled: bool
+
+
+class McpTestResult(BaseModel):
+    ok: bool
+    message: str
+    tools: list[McpToolOut] = []
+
+
+async def _test_mcp(url: str, token: str | None) -> McpTestResult:
+    from app.connectors.mcp import McpFailed, default_enabled, list_tools
+
+    try:
+        tools = await list_tools(url, token)
+    except McpFailed as exc:
+        return McpTestResult(ok=False, message=str(exc))
+    enabled = set(default_enabled(tools))
+    return McpTestResult(
+        ok=True,
+        message=f"Connected. Found {len(tools)} tool{'s' if len(tools) != 1 else ''}.",
+        tools=[_tool_out(t, t["name"] in enabled) for t in tools],
+    )
+
+
+def _tool_out(tool: dict, enabled: bool) -> McpToolOut:
+    return McpToolOut(name=tool["name"], title=tool.get("title") or tool["name"], description=tool.get("description", ""),
+                      read_only=tool.get("read_only", False), enabled=enabled)
+
+
+def _mcp_source(db: DbSession, user: AdminUser, source_id: uuid.UUID) -> DataSource:
+    source = owned_source(db, user, source_id)
+    if source.kind != "mcp":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This isn't an MCP server.")
+    return source
+
+
+@router.post("/apps/{app_id}/sources/mcp/test")
+async def test_mcp(app_id: uuid.UUID, body: McpIn, db: DbSession, user: AdminUser) -> McpTestResult:
+    owned_app(db, user, app_id)
+    return await _test_mcp(body.url, body.token or None)
+
+
+@router.post("/sources/{source_id}/mcp/test")
+async def test_saved_mcp(source_id: uuid.UUID, body: McpIn, db: DbSession, user: AdminUser) -> McpTestResult:
+    """Tests edited settings, using the saved token if none was entered."""
+    from app.connectors.mcp import token_for
+
+    source = _mcp_source(db, user, source_id)
+    return await _test_mcp(body.url, body.token or token_for(source))
+
+
+@router.post("/apps/{app_id}/sources/mcp", status_code=status.HTTP_201_CREATED)
+async def add_mcp(app_id: uuid.UUID, body: McpIn, db: DbSession, user: AdminUser) -> SourceOut:
+    from app.connectors.mcp import secret_context
+    from app.crypto import encrypt
+
+    owned_app(db, user, app_id)
+    source = DataSource(id=uuid.uuid4(), app_id=app_id, kind="mcp", name=body.name.strip(), status="pending",
+                        config={"url": body.url})
+    source.encrypted_secret = encrypt(body.token, secret_context(source.id)) if body.token else None
+    db.add(source)
+    db.commit()
+    await queue_ingest(source.id)
+    return source_out(source)
+
+
+@router.put("/sources/{source_id}/mcp")
+async def update_mcp(source_id: uuid.UUID, body: McpIn, db: DbSession, user: AdminUser) -> SourceOut:
+    from app.connectors.mcp import secret_context
+    from app.crypto import encrypt
+
+    source = _mcp_source(db, user, source_id)
+    source.name = body.name.strip()
+    source.config = {**source.config, "url": body.url}
+    if body.token:
+        source.encrypted_secret = encrypt(body.token, secret_context(source.id))
+    source.status = "pending"
+    source.error = None
+    db.commit()
+    await queue_ingest(source.id)
+    return source_out(source)
+
+
+class McpToolsIn(BaseModel):
+    enabled: list[str] = Field(max_length=200)
+
+
+@router.get("/sources/{source_id}/mcp/tools")
+def mcp_tools(source_id: uuid.UUID, db: DbSession, user: AdminUser) -> list[McpToolOut]:
+    source = _mcp_source(db, user, source_id)
+    enabled = set(source.config.get("enabled", []))
+    return [_tool_out(t, t["name"] in enabled) for t in source.config.get("tools", [])]
+
+
+@router.put("/sources/{source_id}/mcp/tools")
+def set_mcp_tools(source_id: uuid.UUID, body: McpToolsIn, db: DbSession, user: AdminUser) -> list[McpToolOut]:
+    """Which of the server's tools the app may use."""
+    source = _mcp_source(db, user, source_id)
+    tools = source.config.get("tools", [])
+    known = {t["name"] for t in tools}
+    unknown = [n for n in body.enabled if n not in known]
+    if unknown:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown tool: {unknown[0]}. Re-read the server if it's new.")
+    enabled = [t["name"] for t in tools if t["name"] in set(body.enabled)]
+    source.config = {**source.config, "enabled": enabled, "enabled_count": len(enabled)}
+    db.commit()
+    return [_tool_out(t, t["name"] in enabled) for t in tools]
 
 
 # ------------------------------------------------------------ table notes

@@ -76,7 +76,7 @@ def _setup(app: ChatApp, provider: str):
     """The classifier client, plus one line per data source describing what it holds."""
     with SessionLocal() as db:
         sources = db.execute(
-            select(DataSource.id, DataSource.kind, DataSource.name).where(
+            select(DataSource.id, DataSource.kind, DataSource.name, DataSource.config).where(
                 DataSource.app_id == app.id, DataSource.status == "ready"
             )
         ).all()
@@ -94,8 +94,12 @@ def _setup(app: ChatApp, provider: str):
             )
         }
         lines = []
-        for source_id, kind, name in sources:
-            if kind == "file":
+        for source_id, kind, name, config in sources:
+            if kind == "mcp":
+                enabled = set(config.get("enabled", []))
+                titles = [t.get("title") or t["name"] for t in config.get("tools", []) if t["name"] in enabled]
+                lines.append(f"{name}: lookups for " + "; ".join(titles[:8]))
+            elif kind == "file":
                 first = next((ln.strip() for ln in openings.get(source_id, "").splitlines() if ln.strip()), "")
                 lines.append(f"document {name}" + (f": {first[:100]}" if first else ""))
             else:
