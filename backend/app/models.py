@@ -90,6 +90,24 @@ class UserSession(Base):
     created_at: Mapped[datetime] = _created_at()
 
 
+class AppApiKey(Base):
+    """A key another system (like the ERP) uses to call one chat app's API (see app/routers/api.py)."""
+
+    __tablename__ = "app_api_keys"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    app_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("chat_apps.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # SHA-256 of the key; the key itself is shown once, when it's created.
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    # The first characters, so people can tell keys apart.
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created_at()
+
+
 class ProviderKey(Base):
     __tablename__ = "provider_keys"
     __table_args__ = (UniqueConstraint("user_id", "provider"),)
@@ -248,6 +266,7 @@ class SchemaDoc(Base):
 
 class Conversation(Base):
     __tablename__ = "conversations"
+    __table_args__ = (UniqueConstraint("app_id", "external_id"),)
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     app_id: Mapped[uuid.UUID] = mapped_column(
@@ -263,6 +282,9 @@ class Conversation(Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Message count when reviewed; a conversation that continues is reviewed again.
     reviewed_messages: Mapped[int | None] = mapped_column(Integer)
+    # Conversations started through the API: the caller's own thread ID (like an eBay
+    # conversation), so later messages in that thread continue this conversation.
+    external_id: Mapped[str | None] = mapped_column(String(200))
     # Automatic model choice: the lowest step this conversation may use, raised when
     # the person wasn't satisfied with an answer.
     route_floor: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)

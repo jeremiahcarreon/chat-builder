@@ -58,6 +58,8 @@ class ChatRequest:
     # Re-answer the question behind this answer one step up the model ladder
     # (the "Get a better answer" button); message is then ignored.
     better_than: int | None = None
+    # API calls: the caller's thread ID. Messages with the same ID share a conversation.
+    external_id: str | None = None
 
 
 @dataclass
@@ -134,13 +136,19 @@ def _prepare(req: ChatRequest) -> Prepared:
             return _prepare_better(db, app, req)
 
         conversation = None
-        if req.conversation_id:
+        if req.external_id:
+            # The API key is scoped to this app, so the thread ID alone identifies it.
+            conversation = db.scalar(
+                select(Conversation).where(Conversation.app_id == app.id, Conversation.external_id == req.external_id)
+            )
+        elif req.conversation_id:
             conversation = _owned_conversation(db, app, req, req.conversation_id)
         if conversation is None:
             conversation = Conversation(
                 app_id=app.id,
                 user_id=req.user_id,
                 visitor_id=req.visitor_id,
+                external_id=req.external_id,
                 title=req.message.strip().splitlines()[0][:80],
             )
             db.add(conversation)

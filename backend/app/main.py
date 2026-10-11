@@ -14,7 +14,7 @@ from app.config import get_settings
 from app.db import SessionLocal
 from app.models import ChatApp, User
 from app.queue import queue
-from app.routers import apps, auth, chat, cloud_switch, embed, prices, provider_keys, quality, sources, system, transfer, updates, usage, users
+from app.routers import api, apps, auth, chat, cloud_switch, embed, prices, provider_keys, quality, sources, system, transfer, updates, usage, users
 from app.security import hash_password
 from app.version import __version__
 
@@ -55,6 +55,7 @@ app.include_router(prices.router)
 app.include_router(users.router)
 app.include_router(embed.router)
 app.include_router(transfer.router)
+app.include_router(api.router)
 
 EMBED_FRAME = re.compile(r"^/embed/app/([0-9a-fA-F-]{36})")
 

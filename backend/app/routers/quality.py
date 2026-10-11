@@ -175,6 +175,8 @@ class RatedAnswer(BaseModel):
     test_case_id: uuid.UUID | None
     # Set when the person clicked "Get a better answer": the model that answered instead.
     better_answer_by: str | None = None
+    # API drafts that staff edited: what was actually sent.
+    final_text: str | None = None
 
 
 @router.get("/feedback")
@@ -228,6 +230,7 @@ def list_feedback(
             rated_at=m.rated_at,
             test_case_id=cases.get(m.id),
             better_answer_by=m.meta.get("better_requested", {}).get("by"),
+            final_text=m.meta.get("api_outcome", {}).get("final_text"),
         )
         for m, number in rows
     ]
@@ -313,11 +316,14 @@ def case_from_answer(app_id: uuid.UUID, message_id: int, body: CaseFromAnswer, d
     if not question:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Couldn't find the question for this answer")
     helpful = message.rating == 1
+    # A draft staff edited before sending: what they sent is the answer to aim for.
+    edited = message.meta.get("api_outcome", {}).get("final_text")
+    reference = edited or (message.content if helpful else "")
     test_case = TestCase(
         app_id=app.id,
         question=question,
         expectation=body.expectation,
-        reference_answer=message.content if helpful and body.expectation == "answer" else "",
+        reference_answer=reference if body.expectation == "answer" else "",
         notes=(f"From user feedback: {message.feedback}" if message.feedback else
                "From a helpful answer" if helpful else "From an unhelpful answer"),
         source_message_id=message.id,
