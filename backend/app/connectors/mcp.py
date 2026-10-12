@@ -178,9 +178,13 @@ async def index_mcp(source: DataSource) -> dict:
     elif previous is None:
         enabled = default_enabled(tools)
     else:
-        known = {t["name"] for t in previous}
+        # Tools that are new, or newly marked read-only by the server, turn on like on a first read.
+        was_read_only = {t["name"]: t.get("read_only", False) for t in previous}
         enabled = [n for n in source.config.get("enabled", []) if n in names]
-        enabled += [t["name"] for t in tools if t["name"] not in known and t["read_only"]]
+        enabled += [
+            t["name"] for t in tools
+            if t["read_only"] and not was_read_only.get(t["name"], False) and t["name"] not in enabled
+        ]
     return {
         "tools": tools, "enabled": enabled, "tool_count": len(tools), "enabled_count": len(enabled), "imported_enabled": None,
     }

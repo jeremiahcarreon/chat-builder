@@ -52,6 +52,16 @@ async def test_reread_keeps_choices_and_adds_new_read_only_tools(monkeypatch):
     assert stats["enabled"] == ["cancel_order", "get_tracking"]
 
 
+async def test_tools_newly_marked_read_only_turn_on(monkeypatch):
+    before = [{**TOOLS[0], "read_only": False}, TOOLS[1]]
+    # find_order wasn't marked read-only before (so it was off); now the server marks it.
+    stats = await _index({"url": "u", "tools": before, "enabled": []}, TOOLS, monkeypatch)
+    assert stats["enabled"] == ["find_order"]
+    # Once it's been read-only, turning it off sticks.
+    stats = await _index({"url": "u", "tools": TOOLS, "enabled": []}, TOOLS, monkeypatch)
+    assert stats["enabled"] == []
+
+
 async def test_import_restores_exported_choices(monkeypatch):
     stats = await _index({"url": "u", "imported_enabled": ["cancel_order", "gone_tool"]}, monkeypatch=monkeypatch)
     assert stats["enabled"] == ["cancel_order"]
