@@ -83,6 +83,11 @@ def _friendly(exc: BaseException, url: str, statuses: list[int]) -> str:
         return "The MCP server rejected the token."
     if 404 in statuses:
         return f"Nothing answered at {url}. Check the address (it usually ends in /mcp)."
+    if 421 in statuses:
+        return (
+            "The MCP server refused the host name in this address (\"Invalid Host header\"). Add it to the "
+            "server's allowed hosts, or turn off its localhost-only DNS rebinding protection."
+        )
     for leaf in _leaves(exc):
         if isinstance(leaf, httpx2.ConnectError):
             return f"Couldn't reach the MCP server at {url}."

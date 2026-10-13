@@ -16,6 +16,7 @@ import json
 import uvicorn
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.server import Context
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp_types import ToolAnnotations
 
 ORDERS = {
@@ -96,4 +97,7 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8931)
     parser.add_argument("--token", default="test-token")
     args = parser.parse_args()
-    uvicorn.run(require_token(server.streamable_http_app(), args.token), host=args.host, port=args.port, log_level="warning")
+    # Reached as host.docker.internal from containers: no localhost-only Host check (DNS rebinding
+    # protection), which the SDK turns on by default for servers bound to localhost.
+    app = server.streamable_http_app(transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
+    uvicorn.run(require_token(app, args.token), host=args.host, port=args.port, log_level="warning")
