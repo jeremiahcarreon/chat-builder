@@ -396,6 +396,8 @@ WIDGET_JS = r"""(function () {
   });
 
   button.addEventListener("click", function () { setOpen(!open); });
+  // Escape closes the chat when the page has focus; the iframe handles its own.
+  document.addEventListener("keydown", function (event) { if (open && event.key === "Escape") setOpen(false); });
   function mount() { document.body.appendChild(panel); document.body.appendChild(button); }
   if (document.body) mount(); else document.addEventListener("DOMContentLoaded", mount);
 

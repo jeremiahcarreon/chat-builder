@@ -5,20 +5,29 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamChat, type AppInfo, type ChatMessage, type ConversationSummary } from "../api";
 
+// The widget remembers which conversation was open, so closing it or moving to another
+// page of the site brings the same conversation back (sessionStorage: this tab only).
+const resumeKey = (appId: string) => `cb-widget:${appId}:conversation`;
+
 export function ChatPanel({
   appId,
   className = "",
   compact = false,
   newChatSignal = 0,
+  historyOpen = false,
+  onHistoryClose,
   showModel = false,
 }: {
   appId: string;
   className?: string;
   // Under each answer, which model automatic model choice picked (for app admins testing).
   showModel?: boolean;
-  // The widget: no conversation list; "new chat" comes from its header.
+  // The widget: no conversation sidebar; "new chat" and "earlier conversations" come from its header.
   compact?: boolean;
   newChatSignal?: number;
+  // Compact only: shows the list of earlier conversations in place of the messages.
+  historyOpen?: boolean;
+  onHistoryClose?: () => void;
 }) {
   const queryClient = useQueryClient();
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -49,16 +58,33 @@ export function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newChatSignal]);
 
+  // The widget: pick up where this tab left off.
+  useEffect(() => {
+    if (!compact) return;
+    const saved = sessionStorage.getItem(resumeKey(appId));
+    if (saved) openConversation(saved).catch(() => sessionStorage.removeItem(resumeKey(appId)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appId, compact]);
+
+  useEffect(() => {
+    if (!compact) return;
+    if (conversationId) sessionStorage.setItem(resumeKey(appId), conversationId);
+    else sessionStorage.removeItem(resumeKey(appId));
+  }, [appId, compact, conversationId]);
+
   async function openConversation(id: string) {
     if (busy) return;
+    const history = await api<ChatMessage[]>(`/api/chat/${appId}/conversations/${id}`);
     setConversationId(id);
-    setMessages(await api<ChatMessage[]>(`/api/chat/${appId}/conversations/${id}`));
+    setMessages(history);
+    onHistoryClose?.();
   }
 
   function newConversation() {
     if (busy) return;
     setConversationId(null);
     setMessages([]);
+    onHistoryClose?.();
   }
 
   async function removeConversation(id: string) {
@@ -241,6 +267,15 @@ export function ChatPanel({
         </ul>
       </aside>
 
+      {compact && historyOpen ? (
+        <ConversationList
+          conversations={conversations ?? []}
+          activeId={conversationId}
+          onOpen={openConversation}
+          onDelete={removeConversation}
+          onNew={newConversation}
+        />
+      ) : (
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
           {messages.length === 0 && (
@@ -291,6 +326,84 @@ export function ChatPanel({
             </button>
           </div>
         </form>
+      </div>
+      )}
+    </div>
+  );
+}
+
+function sameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function whenLabel(iso: string, now: Date): string {
+  const date = new Date(iso);
+  if (sameDay(date, now)) return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+/** The widget's "earlier conversations" view: today's first, so a caller from this morning is one tap away. */
+function ConversationList({
+  conversations,
+  activeId,
+  onOpen,
+  onDelete,
+  onNew,
+}: {
+  conversations: ConversationSummary[];
+  activeId: string | null;
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
+  onNew: () => void;
+}) {
+  const now = new Date();
+  const today = conversations.filter((c) => sameDay(new Date(c.updated_at), now));
+  const earlier = conversations.filter((c) => !sameDay(new Date(c.updated_at), now));
+
+  function group(label: string, items: ConversationSummary[]) {
+    if (items.length === 0) return null;
+    return (
+      <div key={label}>
+        <div className="px-2 pb-1 pt-3 text-xs font-medium uppercase tracking-wide text-slate-400">{label}</div>
+        <ul className="space-y-0.5">
+          {items.map((c) => (
+            <li key={c.id} className="group flex items-center">
+              <button
+                onClick={() => onOpen(c.id)}
+                className={`flex min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-2 text-left text-sm ${
+                  c.id === activeId ? "bg-slate-200 font-medium" : "hover:bg-slate-100"
+                }`}
+                title={c.title}
+              >
+                <span className="min-w-0 flex-1 truncate">{c.title || "Untitled"}</span>
+                <span className="shrink-0 text-xs text-slate-400">{whenLabel(c.updated_at, now)}</span>
+              </button>
+              <button
+                onClick={() => onDelete(c.id)}
+                className="invisible p-1 text-slate-400 hover:text-red-600 group-hover:visible"
+                aria-label="Delete conversation"
+              >
+                <Trash2 size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex-1 overflow-y-auto px-3 pb-3">
+        <button
+          onClick={onNew}
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-100"
+        >
+          <MessageSquarePlus size={16} /> New chat
+        </button>
+        {conversations.length === 0 && <p className="mt-6 text-center text-sm text-slate-500">No conversations yet.</p>}
+        {group("Today", today)}
+        {group("Earlier", earlier)}
       </div>
     </div>
   );

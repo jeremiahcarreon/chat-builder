@@ -1,4 +1,4 @@
-import { MessageSquarePlus, X } from "lucide-react";
+import { History, MessageSquarePlus, X } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { useParams } from "react-router";
 import { ApiError, api, setWidgetAuth, type WidgetConfig } from "../api";
@@ -26,10 +26,20 @@ export function EmbedChat() {
   const [config, setConfig] = useState<WidgetConfig | null>(null);
   const [stage, setStage] = useState<Stage>({ kind: "loading" });
   const [newChat, setNewChat] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   function close() {
     window.parent.postMessage({ type: "cb:close" }, "*");
   }
+
+  // Escape closes the chat while it has focus (the page's own widget script covers the rest).
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   function signedIn(token: string, name: string) {
     sessionStorage.setItem(storageKey(appId), JSON.stringify({ token, name }));
@@ -131,16 +141,33 @@ export function EmbedChat() {
           {stage.kind === "ready" && stage.name && <div className="truncate text-xs opacity-80">Signed in as {stage.name}</div>}
         </div>
         {stage.kind === "ready" && (
-          <button onClick={() => setNewChat((n) => n + 1)} className="rounded p-1.5 hover:bg-white/15" aria-label="New chat" title="New chat">
-            <MessageSquarePlus size={18} />
-          </button>
+          <>
+            <button
+              onClick={() => setHistoryOpen((open) => !open)}
+              className={`rounded p-1.5 hover:bg-white/15 ${historyOpen ? "bg-white/20" : ""}`}
+              aria-label="Earlier conversations"
+              title="Earlier conversations"
+            >
+              <History size={18} />
+            </button>
+            <button onClick={() => setNewChat((n) => n + 1)} className="rounded p-1.5 hover:bg-white/15" aria-label="New chat" title="New chat">
+              <MessageSquarePlus size={18} />
+            </button>
+          </>
         )}
         <button onClick={close} className="rounded p-1.5 hover:bg-white/15" aria-label="Close chat">
           <X size={18} />
         </button>
       </header>
       <main className="flex min-h-0 flex-1">
-        {stage.kind === "ready" && <ChatPanel appId={appId} compact newChatSignal={newChat} className="flex-1" />}
+        {stage.kind === "ready" && <ChatPanel
+            appId={appId}
+            compact
+            newChatSignal={newChat}
+            historyOpen={historyOpen}
+            onHistoryClose={() => setHistoryOpen(false)}
+            className="flex-1"
+          />}
         {stage.kind === "login" && <WidgetLogin appId={appId} onSignedIn={signedIn} />}
         {(stage.kind === "loading" || stage.kind === "waiting") && (
           <p className="m-auto text-sm text-slate-500">{stage.kind === "waiting" ? "Signing you in..." : "Loading..."}</p>
