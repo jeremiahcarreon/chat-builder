@@ -48,3 +48,15 @@ def test_short_passphrase_and_wrong_file():
         encrypt_stream(io.BytesIO(b"x"), io.BytesIO(), "short")
     with pytest.raises(BackupError, match="isn't a Chat Builder backup"):
         decrypt_stream(io.BytesIO(b"PK\x03\x04 a zip file"), io.BytesIO(), PASS)
+
+
+def test_every_source_secret_is_re_encrypted_with_its_own_context():
+    import uuid
+
+    from app.backup import source_secret_context
+    from app.connectors import databases, mcp
+
+    source_id = uuid.uuid4()
+    assert source_secret_context("mcp", source_id) == mcp.secret_context(source_id)
+    for kind in ("postgres", "mssql", "mysql", "mariadb"):
+        assert source_secret_context(kind, source_id) == databases.secret_context(source_id)

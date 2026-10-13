@@ -16,6 +16,7 @@ secret with the new install's key, so the new .env needs no changes.
 
 import base64
 import getpass
+import importlib.util
 import io
 import json
 import os
@@ -116,12 +117,28 @@ def _libpq_url() -> str:
     return get_settings().database_url.replace("postgresql+psycopg://", "postgresql://", 1)
 
 
+def _bundled_pg_bin() -> Path | None:
+    """The Postgres tools of the pgserver package, when installed (development and test setups)."""
+    spec = importlib.util.find_spec("pgserver")
+    if spec is None or not spec.submodule_search_locations:
+        return None
+    folder = Path(next(iter(spec.submodule_search_locations))) / "pginstall" / "bin"
+    return folder if folder.is_dir() else None
+
+
 def _pg_tool(name: str) -> str:
-    folder = os.environ.get("PG_BIN")
-    path = str(Path(folder) / name) if folder else shutil.which(name)
-    if not path or not Path(path).exists():
-        raise BackupError(f"{name} isn't available in this environment.")
-    return path
+    """pg_dump or pg_restore: from PG_BIN, the PATH (the Docker image), or a bundled Postgres."""
+    candidates = []
+    if folder := os.environ.get("PG_BIN"):
+        candidates.append(Path(folder) / name)
+    if found := shutil.which(name):
+        candidates.append(Path(found))
+    if bundled := _bundled_pg_bin():
+        candidates.append(bundled / name)
+    for path in candidates:
+        if path.is_file():
+            return str(path)
+    raise BackupError(f"{name} isn't available in this environment. Install the PostgreSQL client tools or set PG_BIN.")
 
 
 def _run(args: list[str]) -> None:
@@ -176,6 +193,15 @@ def create(target: BinaryIO, passphrase: str) -> dict:
 # ----------------------------------------------------------------- restore
 
 
+def source_secret_context(kind: str, source_id) -> str:
+    """The context a data source's secret is encrypted with: an MCP token or a database password."""
+    from app.connectors import databases, mcp
+
+    if kind == mcp.MCP_KIND:
+        return mcp.secret_context(source_id)
+    return databases.secret_context(source_id)
+
+
 def _re_encrypt(conn, old_key: bytes, new_key: bytes) -> int:
     """Decrypts every stored secret with the old install's key and re-encrypts it with this one's."""
     from sqlalchemy import text
@@ -189,7 +215,7 @@ def _re_encrypt(conn, old_key: bytes, new_key: bytes) -> int:
     # (table, secret column, select list, context the value was encrypted with)
     targets = [
         ("provider_keys", "encrypted_key", "id, provider, encrypted_key", lambda r: f"provider_key:{r['provider']}"),
-        ("data_sources", "encrypted_secret", "id, encrypted_secret", lambda r: f"data_source:{r['id']}"),
+        ("data_sources", "encrypted_secret", "id, kind, encrypted_secret", lambda r: source_secret_context(r["kind"], r["id"])),
         ("chat_apps", "encrypted_embed_secret", "id, encrypted_embed_secret", lambda r: f"embed_secret:{r['id']}"),
     ]
     count = 0
@@ -224,7 +250,9 @@ def restore(source: BinaryIO, passphrase: str) -> dict:
             tar.extractall(Path(work) / "contents", members=members, filter="data")
 
         with engine.connect() as conn:
-            current = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+            # A database Chat Builder hasn't set up yet has no version table: nothing to compare.
+            has_versions = conn.execute(text("SELECT to_regclass('public.alembic_version')")).scalar()
+            current = conn.execute(text("SELECT version_num FROM alembic_version")).scalar() if has_versions else None
         backup_revision = manifest.get("alembic_revision") or ""
         if current and backup_revision and backup_revision > current:
             raise BackupError(
@@ -264,7 +292,14 @@ def restore(source: BinaryIO, passphrase: str) -> dict:
             old_key = base64.b64decode(manifest["master_key"])
             if old_key != settings.master_key_bytes:
                 secrets = _re_encrypt(conn, old_key, settings.master_key_bytes)
-            # Grants weren't restored (--no-acl); spreadsheet access is re-granted on first use.
+            # Roles belong to the Postgres server, not the dump: a server Chat Builder hasn't run on
+            # yet doesn't have the spreadsheet reader. Grants weren't restored (--no-acl);
+            # per-spreadsheet access is re-granted on first use.
+            conn.execute(text(
+                "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chatbuilder_sheet_reader') "
+                "THEN CREATE ROLE chatbuilder_sheet_reader NOLOGIN; END IF; END $$"
+            ))
+            conn.execute(text("GRANT chatbuilder_sheet_reader TO CURRENT_USER"))
             conn.execute(text("GRANT USAGE ON SCHEMA sheets TO chatbuilder_sheet_reader"))
         engine.dispose()
 
