@@ -172,16 +172,27 @@ def sign_identity(app: ChatApp, username: str, email: str, name: str = "") -> st
     return jwt.encode(claims, decrypt(app.encrypted_embed_secret, secret_context(app.id)), algorithm="HS256")
 
 
+def preview_identity(user: User) -> tuple[str, str, str]:
+    """A stand-in person for the preview page: (username, email, name).
+
+    Signing the admin in as themselves would link their account to whatever username
+    the preview used, and the real site's sign-in (with its own usernames) would then
+    be refused as a different person with the same email.
+    """
+    return f"preview:{user.id}", f"preview.{user.id.hex}@chat-builder.preview", f"Widget preview ({user.name or user.email})"
+
+
 @router.get("/embed/preview/{app_id}", include_in_schema=False)
 def preview(app_id: uuid.UUID, request: Request, db: DbSession) -> HTMLResponse:
-    """A test page that embeds the widget, signed in as the admin viewing it."""
+    """A test page that embeds the widget, signed in as a stand-in for the admin viewing it."""
     user = current_user(request, db)
     app = owned_app(db, user, app_id)
     if not app.embed_enabled:
         return HTMLResponse("<p>Turn on embedding for this app first.</p>", status_code=400)
     token = ""
     if app.embed_auth == "signed":
-        token = sign_identity(app, username=user.username or user.email, email=user.email, name=user.name)
+        username, email, name = preview_identity(user)
+        token = sign_identity(app, username=username, email=email, name=name)
     script = f"{public_base(request)}/embed/widget.js?app={app.id}"
     token_attr = f' data-user-token="{escape(token)}"' if token else ""
     return HTMLResponse(
@@ -190,7 +201,7 @@ def preview(app_id: uuid.UUID, request: Request, db: DbSession) -> HTMLResponse:
 <body style="font-family: system-ui, sans-serif; background: #f1f5f9; margin: 0; padding: 40px; color: #334155">
 <h1 style="margin-top:0">Widget preview</h1>
 <p>This page stands in for your site. Click the chat button in the bottom right.</p>
-<p style="color:#64748b">Sign-in mode: <strong>{escape(app.embed_auth)}</strong>{" (signed in as " + escape(user.email) + ")" if token else ""}</p>
+<p style="color:#64748b">Sign-in mode: <strong>{escape(app.embed_auth)}</strong>{" (signed in as a stand-in preview person, not your own account)" if token else ""}</p>
 <script src="{escape(script)}"{token_attr} async></script>
 </body></html>"""
     )

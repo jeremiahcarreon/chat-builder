@@ -6,8 +6,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.crypto import encrypt
-from app.models import ChatApp
-from app.routers.embed import EmbedSettings, frame_ancestors, secret_context, verify_identity
+from app.models import ChatApp, User
+from app.routers.embed import EmbedSettings, IdentityClaims, frame_ancestors, preview_identity, secret_context, verify_identity
 
 SECRET = "s" * 40
 
@@ -73,3 +73,12 @@ def test_allowed_domain_validation():
     for bad in ("erp.example.com", "javascript:alert(1)", "https://example.com/path", "https://a b.com", "*"):
         with pytest.raises(ValueError):
             EmbedSettings(enabled=True, auth="signed", allowed_domains=[bad])
+
+
+def test_preview_identity_is_not_the_admin():
+    """The preview must not claim the admin's email: that would bind their account to the preview's username."""
+    admin = User(id=uuid.uuid4(), email="admin@example.com", name="Ada", username=None)
+    username, email, name = preview_identity(admin)
+    assert username != admin.email and email != admin.email
+    assert username.startswith("preview:") and "Ada" in name
+    IdentityClaims(sub=username, email=email, name=name)  # passes the same validation as a signed token
