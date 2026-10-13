@@ -63,36 +63,40 @@ export function AppEditor() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <Link to="/apps" className="text-sm text-slate-500 hover:underline">
-            ← Chat Apps
-          </Link>
-          <h1 className="text-2xl font-semibold">{app.name}</h1>
+      {/* Stays at the top of the scrolling area; the negative margin and matching padding
+          cover the page's top padding so content doesn't show above the header. */}
+      <div className="sticky top-0 z-10 -mt-8 space-y-6 bg-slate-50 pt-8">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <Link to="/apps" className="text-sm text-slate-500 hover:underline">
+              ← Chat Apps
+            </Link>
+            <h1 className="text-2xl font-semibold">{app.name}</h1>
+          </div>
+          <div className="flex gap-2">
+            <ExportButton appId={app.id} />
+            <a
+              href={`/chat/${app.id}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-100"
+            >
+              Open chat page <ExternalLink size={14} />
+            </a>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <ExportButton appId={app.id} />
-          <a
-          href={`/chat/${app.id}`}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-100"
-        >
-          Open chat page <ExternalLink size={14} />
-        </a>
-        </div>
+        <Tabs
+          tabs={[
+            { id: "settings", label: "Settings" },
+            { id: "sources", label: "Data sources" },
+            { id: "chat", label: "Try it" },
+            { id: "quality", label: "Quality" },
+            { id: "deploy", label: "Deploy" },
+          ]}
+          active={tab}
+          onChange={setTab}
+        />
       </div>
-      <Tabs
-        tabs={[
-          { id: "settings", label: "Settings" },
-          { id: "sources", label: "Data sources" },
-          { id: "chat", label: "Try it" },
-          { id: "quality", label: "Quality" },
-          { id: "deploy", label: "Deploy" },
-        ]}
-        active={tab}
-        onChange={setTab}
-      />
       {tab === "settings" && <AppSettingsForm initial={app} appId={app.id} />}
       {tab === "sources" && <DataSourcesTab appId={app.id} />}
       {tab === "chat" && <ChatPanel appId={app.id} showModel className="h-[70vh]" />}

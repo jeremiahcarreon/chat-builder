@@ -22,10 +22,10 @@ export function Layout() {
   });
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="flex w-60 flex-col border-r border-slate-200 bg-white">
+    <div className="flex h-screen overflow-hidden">
+      <aside className="flex w-60 shrink-0 flex-col border-r border-slate-200 bg-white">
         <div className="px-5 py-5 text-lg font-semibold">Chat Builder</div>
-        <nav className="flex-1 space-y-1 px-3">
+        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3">
           {nav.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
@@ -41,7 +41,7 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="border-t border-slate-200 p-3">
+        <div className="shrink-0 border-t border-slate-200 p-3">
           <div className="truncate px-3 pb-2 text-xs text-slate-500">{user?.email}</div>
           {updates && <div className="px-3 pb-2 text-xs text-slate-400">Version {updates.current}</div>}
           <button
@@ -53,7 +53,7 @@ export function Layout() {
           </button>
         </div>
       </aside>
-      <main className="flex-1 overflow-y-auto">
+      <main className="min-w-0 flex-1 overflow-y-auto">
         <UpdateBanner />
         <div className="mx-auto max-w-4xl px-8 py-8">
           <Outlet />
