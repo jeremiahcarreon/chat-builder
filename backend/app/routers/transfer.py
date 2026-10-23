@@ -1,4 +1,5 @@
-"""Export a chat app to a .zip file and import it into any Chat Builder install.
+"""Export a chat app to a .zip file and import it into any Chat Builder install,
+or copy it within this install, choosing what comes along.
 
 The file holds the app's settings, its data sources (uploaded files themselves,
 and database connection details with table notes) and its test set. It never
@@ -20,8 +21,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, status
 from fastapi.responses import Response
-from pydantic import ValidationError
-from sqlalchemy import select
+from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import func, insert, literal, select
 
 from app.config import get_settings
 from app.connectors.databases import SERVER_KINDS
@@ -30,7 +31,7 @@ from app.connectors.mcp import secret_context as mcp_secret_context
 from app.crypto import decrypt, encrypt
 from app.deps import AdminUser, DbSession
 from app.evals.versions import current_version
-from app.models import ChatApp, DataSource, TestCase
+from app.models import ChatApp, Chunk, DataSource, SchemaDoc, TestCase
 from app.routers.apps import AppIn, owned_app
 from app.routers.embed import secret_context as embed_secret_context
 from app.routers.sources import _safe_filename, queue_ingest, source_dir, tag_skus
@@ -234,3 +235,159 @@ async def import_app(file: UploadFile, db: DbSession, user: AdminUser) -> dict:
         # Embedding sites must switch to the new secret from the Deploy tab.
         "new_signing_secret": new_secret,
     }
+
+
+# ------------------------------------------------------------------ copy
+
+# What a copy can take from the original, in groups a person can pick from. Settings in
+# no group (provider and model) are always copied; the copy needs some model to run.
+SETTING_GROUPS = [
+    {
+        "id": "personality",
+        "label": "Personality and knowledge",
+        "hint": "Description, welcome message, personality and knowledge notes.",
+        "fields": ("description", "welcome_message", "personality", "knowledge_notes"),
+    },
+    {
+        "id": "scope",
+        "label": "Scope and guardrails",
+        "hint": "What's in and out of scope, the refusal message, strict mode and the classifier settings.",
+        "fields": (
+            "in_scope", "out_of_scope", "refusal_message", "strict_mode", "classifier_enabled",
+            "classifier_provider", "classifier_model", "classifier_strictness", "classifier_fail_open",
+        ),
+    },
+    {
+        "id": "model",
+        "label": "Model settings and automatic routing",
+        "hint": "Temperature, seed, answer length and the model ladder. The provider and model always come along.",
+        "fields": ("temperature", "seed", "max_answer_tokens", "auto_route", "route_tiers", "router"),
+    },
+    {
+        "id": "limits",
+        "label": "Usage limits",
+        "hint": "Messages per minute and the daily token limit.",
+        "fields": ("messages_per_minute", "daily_token_limit"),
+    },
+]
+ALWAYS_COPIED = ("provider", "model")
+
+
+def copied_settings(app: ChatApp, groups: set[str]) -> AppIn:
+    """The copy's settings: the chosen groups from the original, defaults for the rest."""
+    fields = set(ALWAYS_COPIED)
+    for group in SETTING_GROUPS:
+        if group["id"] in groups:
+            fields.update(group["fields"])
+    return AppIn(name=app.name, **{name: getattr(app, name) for name in fields})
+
+
+class CopyOptions(BaseModel):
+    name: str
+    settings: list[dict]
+    sources: list[dict]
+    test_count: int
+    widget: bool
+
+
+class CopyIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    settings: list[str] = Field(default_factory=list)
+    sources: list[uuid.UUID] = Field(default_factory=list, max_length=500)
+    tests: bool = False
+    # The widget settings (sites, sign-in mode, colour); the copy always gets its own signing secret.
+    widget: bool = False
+
+
+@router.get("/api/apps/{app_id}/copy-options")
+def copy_options(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> CopyOptions:
+    app = owned_app(db, user, app_id)
+    sources = db.scalars(select(DataSource).where(DataSource.app_id == app.id).order_by(DataSource.created_at))
+    test_count = db.scalar(select(func.count()).select_from(TestCase).where(TestCase.app_id == app.id)) or 0
+    return CopyOptions(
+        name=_unique_name(db, f"{app.name} copy"),
+        settings=[{k: g[k] for k in ("id", "label", "hint")} for g in SETTING_GROUPS],
+        sources=[{"id": str(s.id), "kind": s.kind, "name": s.name, "status": s.status} for s in sources],
+        test_count=test_count,
+        widget=app.embed_enabled,
+    )
+
+
+def _copy_source(db: DbSession, source: DataSource, app: ChatApp) -> DataSource:
+    """A source for the new app with the same settings, files and search index, so nothing is reprocessed."""
+    copy = DataSource(
+        id=uuid.uuid4(), app_id=app.id, kind=source.kind, name=source.name,
+        config=dict(source.config), status=source.status, error=source.error,
+    )
+    path = source.config.get("path")
+    if path and Path(path).is_file():
+        directory = source_dir(copy.id)
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / Path(path).name
+        shutil.copy2(path, target)
+        copy.config["path"] = str(target)
+    if source.encrypted_secret:
+        # Secrets are bound to the source's id, so the copy needs them under its own.
+        context = mcp_secret_context if source.kind == "mcp" else db_secret_context
+        copy.encrypted_secret = encrypt(decrypt(source.encrypted_secret, context(source.id)), context(copy.id))
+    db.add(copy)
+    db.flush()
+    for table in (Chunk, SchemaDoc):
+        columns = [c for c in table.__table__.columns if c.name not in ("id", "app_id", "source_id")]
+        db.execute(
+            insert(table).from_select(
+                ["app_id", "source_id", *[c.name for c in columns]],
+                select(literal(app.id), literal(copy.id), *columns).where(table.source_id == source.id),
+            )
+        )
+    return copy
+
+
+@router.post("/api/apps/{app_id}/copy", status_code=status.HTTP_201_CREATED)
+async def copy_app(app_id: uuid.UUID, body: CopyIn, db: DbSession, user: AdminUser) -> dict:
+    original = owned_app(db, user, app_id)
+    unknown = set(body.settings) - {g["id"] for g in SETTING_GROUPS}
+    if unknown:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown setting group: {', '.join(sorted(unknown))}")
+    settings = copied_settings(original, set(body.settings))
+    app = ChatApp(owner_id=user.id, **settings.model_dump())
+    app.name = _unique_name(db, body.name.strip())
+    if body.widget:
+        app.embed_enabled = original.embed_enabled
+        app.embed_auth = original.embed_auth
+        app.allowed_domains = list(original.allowed_domains)
+        app.widget_color = original.widget_color
+    db.add(app)
+    db.flush()
+    if app.embed_auth == "signed":
+        app.encrypted_embed_secret = encrypt(secrets.token_urlsafe(32), embed_secret_context(app.id))
+    current_version(db, app)
+
+    wanted = set(body.sources)
+    to_ingest: list[uuid.UUID] = []
+    copied = 0
+    if wanted:
+        sources = db.scalars(select(DataSource).where(DataSource.app_id == original.id, DataSource.id.in_(wanted)))
+        for source in sources:
+            copy = _copy_source(db, source, app)
+            copied += 1
+            if source.status != "ready":
+                # Never finished (or failed) on the original: try again for the copy.
+                copy.status = "pending"
+                copy.error = None
+                to_ingest.append(copy.id)
+
+    tests = 0
+    if body.tests:
+        for test in db.scalars(select(TestCase).where(TestCase.app_id == original.id).order_by(TestCase.created_at)):
+            db.add(
+                TestCase(
+                    app_id=app.id, question=test.question, expectation=test.expectation,
+                    must_include=test.must_include, reference_answer=test.reference_answer, notes=test.notes,
+                )
+            )
+            tests += 1
+    db.commit()
+    for source_id in to_ingest:
+        await queue_ingest(source_id)
+    return {"app_id": str(app.id), "name": app.name, "sources": copied, "tests": tests}

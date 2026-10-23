@@ -6,6 +6,7 @@ import { api, type ChatApp, type ChatAppInput, type CloudSwitch, type ProviderKe
 import { RoutingCard } from "../components/RoutingCard";
 import { ChatPanel } from "../components/ChatPanel";
 import { Button, Card, Field, Input, Select, Tabs, Textarea, Toggle } from "../components/ui";
+import { CopyButton } from "../components/CopyDialog";
 import { ExportButton } from "../components/ExportDialog";
 import { DataSourcesTab } from "./DataSourcesTab";
 import { DeployTab } from "./DeployTab";
@@ -74,6 +75,7 @@ export function AppEditor() {
             <h1 className="text-2xl font-semibold">{app.name}</h1>
           </div>
           <div className="flex gap-2">
+            <CopyButton appId={app.id} />
             <ExportButton appId={app.id} />
             <a
               href={`/chat/${app.id}`}
