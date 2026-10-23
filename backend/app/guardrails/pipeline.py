@@ -99,6 +99,8 @@ def _setup(app: ChatApp, provider: str):
                 enabled = set(config.get("enabled", []))
                 titles = [t.get("title") or t["name"] for t in config.get("tools", []) if t["name"] in enabled]
                 lines.append(f"{name}: lookups for " + "; ".join(titles[:8]))
+            elif kind == "lessons":
+                lines.append(f"{name}: how staff have answered similar messages before")
             elif kind == "file":
                 first = next((ln.strip() for ln in openings.get(source_id, "").splitlines() if ln.strip()), "")
                 lines.append(f"document {name}" + (f": {first[:100]}" if first else ""))

@@ -20,6 +20,24 @@ async def ingest_source_task(source_id: str) -> None:
     await ingest_source(uuid.UUID(source_id))
 
 
+@queue.task(name="learn_lesson", queue="ingest")
+async def learn_lesson_task(
+    app_id: str, customer_message: str, reply: str, draft: str | None = None,
+    context: dict | None = None, origin: dict | None = None,
+) -> None:
+    """A reply staff sent, turned into an anonymised lesson for future drafts."""
+    from app.lessons import learn
+
+    await learn(uuid.UUID(app_id), customer_message, reply, draft, context, origin)
+
+
+@queue.task(name="import_lessons", queue="ingest")
+async def import_lessons_task(source_id: str, texts: list[str]) -> None:
+    from app.lessons import import_lessons
+
+    await import_lessons(uuid.UUID(source_id), texts)
+
+
 @queue.task(name="run_tests", queue="tests")
 async def run_tests_task(run_id: str) -> None:
     from app.evals.runner import run_tests

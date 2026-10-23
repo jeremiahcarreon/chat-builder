@@ -32,7 +32,9 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.deps import AdminUser, DbSession
 from app.llm.engine import ChatAccessError, ChatRequest, run_chat
+from app.lessons import question_for
 from app.models import AppApiKey, ChatApp, Conversation, Message
+from app.queue import queue
 from app.routers.apps import owned_app
 
 router = APIRouter(tags=["api"])
@@ -242,5 +244,45 @@ def record_outcome(app_id: uuid.UUID, message_id: int, body: OutcomeIn, key: Api
     message.rating = 1 if body.outcome == "sent" else -1
     message.feedback = OUTCOME_LABELS[body.outcome]
     message.rated_at = datetime.now(UTC)
+    question = question_for(db, message) if final_text else None
+    context = dict(conversation.context or {})
     db.commit()
+    if final_text and question and final_text != message.content.strip():
+        # What staff changed is worth learning from (see app/lessons.py).
+        await _queue_lesson(app_id, question, final_text, message.content, context,
+                            {"origin": "outcome", "message_id": message.id})
     return OutcomeOut(message_id=message.id, outcome=body.outcome)
+
+
+async def _queue_lesson(app_id: uuid.UUID, customer_message: str, reply: str, draft: str | None,
+                        context: dict | None, origin: dict) -> None:
+    await queue.configure_task("learn_lesson", queue="ingest").defer_async(
+        app_id=str(app_id), customer_message=customer_message, reply=reply, draft=draft,
+        context=context or None, origin=origin,
+    )
+
+
+class LessonIn(BaseModel):
+    # The message a person sent you (the eBay buyer's message, the ticket).
+    customer_message: str = Field(min_length=1, max_length=8_000)
+    # The reply your staff actually sent.
+    reply: str = Field(min_length=1, max_length=8_000)
+    # The draft this app suggested, if there was one (so the lesson can note what changed).
+    draft: str | None = Field(default=None, max_length=8_000)
+    # Same shape as the answer request's context. Used only to understand the exchange; never stored.
+    context: dict[str, str] | None = Field(default=None, max_length=20)
+
+
+@router.post("/api/v1/apps/{app_id}/lessons", status_code=status.HTTP_202_ACCEPTED)
+async def teach(app_id: uuid.UUID, body: LessonIn, key: ApiKey, db: DbSession) -> dict:
+    """A reply staff sent, for the app to learn from.
+
+    The exchange is turned into a short, anonymised lesson (no names, usernames, order or
+    tracking numbers, stores, emails or phone numbers) and kept under the app's
+    "Learned from sent replies" data source, where similar future questions retrieve it.
+    Edited drafts reported through the outcome endpoint are learned from automatically.
+    """
+    db.close()
+    await _queue_lesson(app_id, body.customer_message.strip(), body.reply.strip(), body.draft, body.context,
+                        {"origin": "api"})
+    return {"queued": True}

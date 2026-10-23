@@ -6,12 +6,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.deps import AdminUser, DbSession
 from app.ingest import clear_index
-from app.models import ChatApp, DataSource
+from app.models import ChatApp, Chunk, DataSource
 from app.queue import queue
 from app.rag.parsing import DOCUMENT_EXTENSIONS
 from app.rag.skus import from_filename
@@ -42,7 +42,7 @@ class SourceOut(BaseModel):
 PUBLIC_CONFIG = {
     "filename", "size", "chunk_count", "page_count", "table_count", "row_count",
     "host", "port", "database", "username", "encryption", "require_tls", "schemas",
-    "query_timeout", "dirty_reads", "hidden_count", "skus", "url", "tool_count", "enabled_count",
+    "query_timeout", "dirty_reads", "hidden_count", "skus", "url", "tool_count", "enabled_count", "lesson_count",
 }
 
 
@@ -185,11 +185,54 @@ def update_source(source_id: uuid.UUID, body: RenameSource, db: DbSession, user:
 @router.post("/sources/{source_id}/reprocess")
 async def reprocess_source(source_id: uuid.UUID, db: DbSession, user: AdminUser) -> SourceOut:
     source = owned_source(db, user, source_id)
+    if source.kind == "lessons":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Learned replies aren't processed from a file; there's nothing to redo.")
     source.status = "pending"
     source.error = None
     db.commit()
     await queue_ingest(source.id)
     return source_out(source)
+
+
+class LessonOut(BaseModel):
+    id: int
+    text: str
+    learned_at: str | None
+    # Where it came from: the API ("api") or an edited draft ("outcome"), and the draft's message id.
+    origin: str | None
+    message_id: int | None
+
+
+def _lessons_source(db: DbSession, user: AdminUser, source_id: uuid.UUID) -> DataSource:
+    source = owned_source(db, user, source_id)
+    if source.kind != "lessons":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Not a learned-replies source.")
+    return source
+
+
+@router.get("/sources/{source_id}/lessons")
+def list_lessons(source_id: uuid.UUID, db: DbSession, user: AdminUser) -> list[LessonOut]:
+    """What the assistant has learned from sent replies, newest first."""
+    source = _lessons_source(db, user, source_id)
+    rows = db.scalars(select(Chunk).where(Chunk.source_id == source.id).order_by(Chunk.ordinal.desc()))
+    return [
+        LessonOut(id=c.id, text=c.content, learned_at=c.meta.get("learned_at"), origin=c.meta.get("origin"),
+                  message_id=c.meta.get("message_id"))
+        for c in rows
+    ]
+
+
+@router.delete("/sources/{source_id}/lessons/{lesson_id}", status_code=status.HTTP_204_NO_CONTENT)
+def forget_lesson(source_id: uuid.UUID, lesson_id: int, db: DbSession, user: AdminUser) -> None:
+    source = _lessons_source(db, user, source_id)
+    chunk = db.get(Chunk, lesson_id)
+    if chunk is None or chunk.source_id != source.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Lesson not found")
+    db.delete(chunk)
+    db.flush()
+    count = db.scalar(select(func.count()).select_from(Chunk).where(Chunk.source_id == source.id)) or 0
+    source.config = {**source.config, "lesson_count": count}
+    db.commit()
 
 
 @router.delete("/sources/{source_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -1,9 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Database, FileSpreadsheet, FileText, Loader2, Pencil, Plug, RefreshCw, Table2, Trash2, Wrench } from "lucide-react";
+import { BookOpen, Database, FileSpreadsheet, FileText, GraduationCap, Loader2, Pencil, Plug, RefreshCw, Table2, Trash2, Wrench } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { api, type DataSource } from "../api";
 import { DatabaseForm, SERVER_KINDS } from "./DatabaseForm";
+import { LessonsPanel } from "./LessonsPanel";
 import { McpForm, McpToolsPanel } from "./McpForm";
 import { TablesPanel } from "./TablesPanel";
 
@@ -16,12 +17,14 @@ const KIND_LABELS: Record<string, string> = {
   mariadb: "MariaDB",
   postgres: "PostgreSQL",
   mcp: "MCP server",
+  lessons: "Learned replies",
 };
 
 function KindIcon({ kind }: { kind: string }) {
   if (kind === "file") return <FileText size={18} className="text-slate-500" />;
   if (kind === "spreadsheet") return <FileSpreadsheet size={18} className="text-emerald-600" />;
   if (kind === "mcp") return <Plug size={18} className="text-violet-600" />;
+  if (kind === "lessons") return <GraduationCap size={18} className="text-amber-600" />;
   return <Database size={18} className="text-sky-600" />;
 }
 
@@ -58,6 +61,7 @@ function summary(source: DataSource): string {
   if (d.table_count) parts.push(`${d.table_count} table${d.table_count === 1 ? "" : "s"}`);
   if (d.hidden_count) parts.push(`${d.hidden_count} hidden`);
   if (d.row_count) parts.push(`${Number(d.row_count).toLocaleString()} row${d.row_count === 1 ? "" : "s"}`);
+  if (typeof d.lesson_count === "number") parts.push(`${d.lesson_count} lesson${d.lesson_count === 1 ? "" : "s"} from replies staff sent`);
   return parts.join(" · ");
 }
 
@@ -112,7 +116,14 @@ export function SourceList({ sources, showApp = false }: { sources: DataSource[]
               ) : (
                 <DatabaseForm appId={source.app_id} existing={source} onDone={() => setEditing(null)} />
               ))}
-            {tables === source.id && (source.kind === "mcp" ? <McpToolsPanel sourceId={source.id} /> : <TablesPanel sourceId={source.id} />)}
+            {tables === source.id &&
+              (source.kind === "mcp" ? (
+                <McpToolsPanel sourceId={source.id} />
+              ) : source.kind === "lessons" ? (
+                <LessonsPanel sourceId={source.id} />
+              ) : (
+                <TablesPanel sourceId={source.id} />
+              ))}
           </div>
           <div className="flex gap-1">
             {(SERVER_KINDS.has(source.kind) || source.kind === "sqlite") && source.status === "ready" && (
@@ -133,6 +144,15 @@ export function SourceList({ sources, showApp = false }: { sources: DataSource[]
                 <Wrench size={15} />
               </button>
             )}
+            {source.kind === "lessons" && (
+              <button
+                onClick={() => setTables(tables === source.id ? null : source.id)}
+                className="rounded p-1.5 text-slate-500 hover:bg-slate-100"
+                title="What it has learned"
+              >
+                <BookOpen size={15} />
+              </button>
+            )}
             {(SERVER_KINDS.has(source.kind) || source.kind === "mcp") && (
               <button
                 onClick={() => setEditing(editing === source.id ? null : source.id)}
@@ -142,6 +162,7 @@ export function SourceList({ sources, showApp = false }: { sources: DataSource[]
                 <Pencil size={15} />
               </button>
             )}
+            {source.kind !== "lessons" && (
             <button
               onClick={() => reprocess.mutate(source.id)}
               className="rounded p-1.5 text-slate-500 hover:bg-slate-100"
@@ -155,8 +176,12 @@ export function SourceList({ sources, showApp = false }: { sources: DataSource[]
             >
               <RefreshCw size={15} />
             </button>
+            )}
             <button
-              onClick={() => confirm(`Remove ${source.name}?`) && remove.mutate(source.id)}
+              onClick={() =>
+                confirm(source.kind === "lessons" ? "Forget everything learned from sent replies?" : `Remove ${source.name}?`) &&
+                remove.mutate(source.id)
+              }
               className="rounded p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600"
               title="Remove"
             >

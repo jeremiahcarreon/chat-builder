@@ -18,7 +18,7 @@ from app.rag.skus import key as sku_key
 
 log = logging.getLogger(__name__)
 
-DOCUMENT_KINDS = {"file"}
+DOCUMENT_KINDS = {"file", "lessons"}
 TOOL_KINDS = {"mcp"}
 
 

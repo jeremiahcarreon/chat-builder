@@ -31,9 +31,11 @@ from app.connectors.mcp import secret_context as mcp_secret_context
 from app.crypto import decrypt, encrypt
 from app.deps import AdminUser, DbSession
 from app.evals.versions import current_version
+from app.lessons import LESSONS_KIND
 from app.models import ChatApp, Chunk, DataSource, SchemaDoc, TestCase
 from app.routers.apps import AppIn, owned_app
 from app.routers.embed import secret_context as embed_secret_context
+from app.queue import queue
 from app.routers.sources import _safe_filename, queue_ingest, source_dir, tag_skus
 from app.version import __version__
 
@@ -82,6 +84,10 @@ def export_app(app_id: uuid.UUID, db: DbSession, user: AdminUser, include_secret
                     entry["token"] = decrypt(source.encrypted_secret, mcp_secret_context(source.id))
             if source.kind == "file":
                 entry["skus"] = source.config.get("skus", [])
+            if source.kind == LESSONS_KIND:
+                entry["lessons"] = list(
+                    db.scalars(select(Chunk.content).where(Chunk.source_id == source.id).order_by(Chunk.ordinal))
+                )
             path = source.config.get("path")
             if path and Path(path).is_file():
                 entry["file"] = f"files/{index}/{source.config.get('filename') or Path(path).name}"
@@ -166,6 +172,7 @@ async def import_app(file: UploadFile, db: DbSession, user: AdminUser) -> dict:
     current_version(db, app)
 
     to_ingest: list[uuid.UUID] = []
+    lesson_imports: list[tuple[uuid.UUID, list[str]]] = []
     needs_password: list[str] = []
     names = set(archive.namelist())
     for entry in manifest.get("sources", []):
@@ -197,6 +204,13 @@ async def import_app(file: UploadFile, db: DbSession, user: AdminUser) -> dict:
                 source.status = "failed"
                 source.error = "Imported without its password. Edit the connection to enter it."
                 needs_password.append(source.name)
+        elif kind == LESSONS_KIND:
+            texts = [str(t) for t in entry.get("lessons", []) if str(t).strip()]
+            if not texts:
+                continue
+            source.status = "ready"
+            source.config = {"lesson_count": 0}
+            lesson_imports.append((source.id, texts))
         elif kind == "mcp":
             settings = entry.get("mcp") or {}
             url = str(settings.get("url") or "")
@@ -227,10 +241,12 @@ async def import_app(file: UploadFile, db: DbSession, user: AdminUser) -> dict:
     db.commit()
     for source_id in to_ingest:
         await queue_ingest(source_id)
+    for source_id, texts in lesson_imports:
+        await queue.configure_task("import_lessons", queue="ingest").defer_async(source_id=str(source_id), texts=texts)
     return {
         "app_id": str(app.id),
         "name": app.name,
-        "sources": len(to_ingest) + len(needs_password),
+        "sources": len(to_ingest) + len(needs_password) + len(lesson_imports),
         "needs_password": needs_password,
         # Embedding sites must switch to the new secret from the Deploy tab.
         "new_signing_secret": new_secret,

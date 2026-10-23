@@ -232,6 +232,15 @@ Http::withToken(config('services.chat_builder.key'))
         'final_text' => $sentText,
     ]);`;
 
+  const teach = `// When staff wrote the reply themselves (no draft, or they threw the draft away), let the app learn from it:
+Http::withToken(config('services.chat_builder.key'))
+    ->post('${base}/api/v1/apps/${appId}/lessons', [
+        'customer_message' => $message->body,
+        'reply'            => $sentText,
+        'draft'            => $message->draft_reply,   // optional: what the app had suggested
+        'context'          => ['ebay_buyer' => $message->buyer_username],
+    ]);`;
+
   return (
     <Card
       title="API"
@@ -315,6 +324,18 @@ Http::withToken(config('services.chat_builder.key'))
             and an edited reply becomes the reference answer when you turn it into a test. Each key counts toward the app's
             messages-per-minute limit on its own; raise that limit in Settings if the ERP sends bursts.
           </p>
+        </div>
+
+        <div className="space-y-2">
+          <div className="font-medium">Learn from what staff send</div>
+          <p className="text-slate-500">
+            An <code>edited</code> outcome with <code>final_text</code> teaches the app automatically. For replies staff wrote
+            without a draft, send the exchange to <code>/lessons</code>. Either way a small model turns it into a short lesson
+            with names, usernames, order and tracking numbers, stores, emails and phone numbers removed, kept under the app's
+            "Learned from sent replies" data source. Similar future questions see the matching lessons; review or delete them
+            in the Data sources tab.
+          </p>
+          <Code>{teach}</Code>
         </div>
       </div>
     </Card>
