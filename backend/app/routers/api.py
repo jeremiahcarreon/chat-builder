@@ -231,7 +231,7 @@ class OutcomeOut(BaseModel):
 
 
 @router.post("/api/v1/apps/{app_id}/messages/{message_id}/outcome")
-def record_outcome(app_id: uuid.UUID, message_id: int, body: OutcomeIn, key: ApiKey, db: DbSession) -> OutcomeOut:
+async def record_outcome(app_id: uuid.UUID, message_id: int, body: OutcomeIn, key: ApiKey, db: DbSession) -> OutcomeOut:
     """What staff did with a drafted answer: recorded as feedback in the Quality tab."""
     message = db.get(Message, message_id)
     conversation = db.get(Conversation, message.conversation_id) if message else None
