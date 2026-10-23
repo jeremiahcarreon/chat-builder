@@ -56,7 +56,7 @@ class Lesson:
 SYSTEM_PROMPT = """\
 You turn one customer exchange into a short, reusable lesson for an assistant that drafts replies to customer messages. The lesson teaches how this business answers this kind of message, so future drafts match what staff actually send.
 
-Write the lesson in general terms. Leave out everything that identifies anyone or any single transaction: names, usernames, email addresses, phone numbers, street addresses, order numbers, item or listing numbers, tracking numbers, store or seller names, dates, prices and amounts specific to this order. Keep what generalises: the kind of question, the vehicle or product details that matter, the policy or fact in the answer, the tone, and what the reply promises or avoids promising.
+Write the lesson in general terms. Leave out everything that identifies anyone or any single transaction: names, usernames, email addresses, phone numbers, street addresses, order numbers, eBay item or listing numbers, tracking numbers, store or seller names, dates, prices and amounts specific to this order. Keep what generalises, and keep it specific: our part numbers (like CC161 or FS289), product names, vehicle years, makes, models and engines, specs, the policy or fact in the answer, the tone, and what the reply promises or avoids promising. A part number is the substance of a lesson, never an identifier.
 
 If the exchange teaches nothing reusable (a one-off fact like a tracking update, a bare thanks, or a reply with no substance), set "keep" to false.
 
