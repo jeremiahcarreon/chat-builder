@@ -4,7 +4,7 @@
 def test_main_imports():
     from app.main import app
 
-    paths = {route.path for route in app.routes}
+    paths = {getattr(route, "path", None) for route in app.routes}
     assert "/api/v1/apps/{app_id}/answer" in paths
     assert "/api/v1/apps/{app_id}/lessons" in paths
     assert "/api/apps/{app_id}/copy" in paths
