@@ -161,6 +161,9 @@ class ChatApp(Base):
     classifier_fail_open: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true", nullable=False
     )
+    # What the classifier decides: "scope" (is the message in scope, the default) or
+    # "reply" (does the sender expect a reply; for apps that draft replies to incoming messages).
+    classifier_purpose: Mapped[str] = mapped_column(String(16), default="scope", server_default="scope", nullable=False)
     # Sampling: None uses the model's default. Sent only to models that accept it.
     temperature: Mapped[float | None] = mapped_column(Float)
     seed: Mapped[int | None] = mapped_column(Integer)

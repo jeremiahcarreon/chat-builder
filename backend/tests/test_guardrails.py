@@ -2,7 +2,19 @@ import uuid
 
 import pytest
 
-from app.guardrails.classifier import PLEASANTRY, ClassifierError, parse, system_prompt, topic_options, user_prompt
+from app.guardrails.classifier import (
+    NO_REPLY,
+    PLEASANTRY,
+    ClassifierError,
+    classify_reply,
+    parse,
+    parse_reply,
+    reply_expected,
+    reply_system_prompt,
+    system_prompt,
+    topic_options,
+    user_prompt,
+)
 from app.guardrails.pipeline import classifier_choice
 from app.models import ChatApp
 
@@ -107,3 +119,49 @@ def test_excluded_match(out_of_scope, message, expected):
     from app.guardrails.classifier import excluded_match
 
     assert excluded_match(_app(out_of_scope=out_of_scope), message) == expected
+
+
+def test_reply_prompt_only_asks_whether_a_reply_is_expected():
+    prompt = reply_system_prompt(_app(description="Drafts replies to eBay buyers"))
+    assert "expecting a reply" in prompt and "Drafts replies to eBay buyers" in prompt
+    assert "In scope" not in prompt and "reply_expected" in prompt
+
+
+def test_parse_reply():
+    assert parse_reply('{"reply_expected": true, "confidence": 0.9}') == (True, 0.9)
+    assert parse_reply('Sure: {"reply_expected": "false"}') == (False, None)
+    with pytest.raises(ClassifierError):
+        parse_reply('{"verdict": "allowed"}')
+
+
+@pytest.mark.parametrize(
+    ("probability", "strictness", "expected"),
+    [(0.3, "lenient", True), (0.2, "lenient", False), (0.5, "balanced", True), (0.49, "balanced", False),
+     (0.7, "strict", False), (0.8, "strict", True)],
+)
+def test_reply_thresholds(probability, strictness, expected):
+    assert reply_expected(probability, strictness) is expected
+
+
+class _Client:
+    def __init__(self, text):
+        self.text = text
+        self.calls = []
+
+    async def complete(self, **kwargs):
+        from app.llm.base import Completion
+
+        self.calls.append(kwargs)
+        return Completion(self.text, 10, 5)
+
+
+async def test_classify_reply_with_an_llm_classifier():
+    app = _app(classifier_purpose="reply")
+    thread = "## Buyer\nDoes this fit a 1967 Impala?\n## Us\nYes.\n## Buyer\nGreat, thanks so much!"
+    client = _Client('{"reply_expected": false, "confidence": 0.95}')
+    result = await classify_reply(client, "claude-haiku-4-5", app, [], thread)
+    assert result.verdict == NO_REPLY and result.confidence == 0.95
+    assert "<latest_message>" in client.calls[0]["prompt"] and "expecting" in client.calls[0]["system"]
+    # A plain "thanks" is never short-circuited as a pleasantry here: it's exactly what this mode decides.
+    client = _Client('{"reply_expected": true, "confidence": 0.8}')
+    assert (await classify_reply(client, "m", app, [], "thanks")).verdict == "allowed"

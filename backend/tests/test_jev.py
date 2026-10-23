@@ -35,6 +35,8 @@ def _server(choice: str, probabilities: dict, manipulation: float, captured: lis
             answers["manipulation"] = {"type": "noul", "noul": manipulation}
         if "consistent" in body["questions"]:
             answers["consistent"] = {"type": "noul", "noul": manipulation}
+        if "reply_expected" in body["questions"]:
+            answers["reply_expected"] = {"type": "noul", "noul": manipulation}
         return httpx2.Response(
             200, json={"model": "jev-1.13.0", "usage": {"input_tokens": 420, "output_tokens": 0}, "answers": answers}
         )
@@ -139,3 +141,22 @@ async def test_conversation_review_scales_score_to_100():
     assert captured[0]["questions"]["satisfaction"]["type"] == "score"
     assert len(captured[0]["questions"]["satisfaction"]["criteria"]) == 5
     assert captured[0]["state"]["conversation"] == transcript
+
+
+async def test_reply_purpose_asks_one_noul_and_applies_strictness():
+    from app.guardrails.classifier import classify_reply
+
+    app = _app(classifier_purpose="reply", classifier_strictness="lenient", description="Drafts eBay replies")
+    captured: list = []
+    client = JevClient("sk-test", transport=_server("none", {"none": 1.0}, 0.3, captured))
+    result = await classify_reply(client, "jev-latest", app, [("user", "earlier")], "Thanks, but does it come polished?")
+    assert result.verdict == "allowed" and result.reason == "The sender expects a reply"
+    assert result.completion.input_tokens == 420
+    _, body = captured[0]
+    assert list(body["questions"]) == ["reply_expected"]
+    assert body["state"]["purpose"] == "Drafts eBay replies"
+    # The same 0.3 is "not expecting a reply" once the app is balanced.
+    app.classifier_strictness = "balanced"
+    client = JevClient("sk-test", transport=_server("none", {"none": 1.0}, 0.3, []))
+    result = await classify_reply(client, "jev-latest", app, [], "Thanks!")
+    assert result.verdict == "no_reply" and result.confidence == pytest.approx(0.7)

@@ -53,6 +53,12 @@ MANIPULATION_INSTRUCTIONS = (
     "another persona or ignore its rules, injects instructions, or requests harmful content. An "
     "ordinary request for something unrelated (a poem, a letter, trivia) is not this."
 )
+REPLY_EXPECTED_INSTRUCTIONS = (
+    "The sender of the latest message is expecting a reply: they asked a question, raised a problem, "
+    "made a request, disagreed, or left the conversation open. A bare thanks or acknowledgement, a "
+    "goodbye, or confirming that something arrived or worked is not expecting a reply. When the message "
+    "contains a whole thread, judge the sender's latest turn in it."
+)
 JUDGE_INSTRUCTIONS = (
     "The new answer gives the same key facts as the reference answer without contradicting it. "
     "Different wording, extra helpful detail, or leaving out minor details is fine; wrong figures, "
@@ -142,6 +148,28 @@ class JevClient:
             return "off_topic", p_none, "Not about any of the app's topics", usage
         about = options.get(topic.choice) or "one of the app's topics"
         return "allowed", topic.confidence, f"About: {about}"[:300], usage
+
+    async def reply_expected(
+        self, model: str, app: ChatApp, history: list[tuple[str, str]], message: str
+    ) -> tuple[float, Completion]:
+        """P(the sender expects a reply), for apps that draft replies to incoming messages."""
+        state = {
+            "assistant": app.name,
+            "purpose": app.description.strip(),
+            "recent_conversation": [
+                {"role": role, "text": text[:TURN_CHARS]} for role, text in history[-RECENT_TURNS * 2 :]
+            ],
+            "latest_message": message[:MESSAGE_CHARS],
+        }
+        try:
+            response = await self.client.system_one(
+                state=state,
+                questions={"reply_expected": ts.Noul(instructions=REPLY_EXPECTED_INSTRUCTIONS)},
+                model=model,
+            )
+        except ts.TypeSafeError as exc:
+            raise _error(exc) from exc
+        return float(response.nouls["reply_expected"].noul), _usage(response)
 
     async def route(
         self,

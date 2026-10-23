@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import func, select
 
 from app.db import SessionLocal
-from app.guardrails.classifier import EXCLUDED_REASON, ClassifierError, classify
+from app.guardrails.classifier import EXCLUDED_REASON, NO_REPLY, ClassifierError, classify, classify_reply
 from app.guardrails.jev import JevClient
 from app.guardrails.limits import check_limits
 from app.llm.base import LLMError
@@ -151,7 +151,10 @@ async def check_message(
     try:
         provider, model = await asyncio.to_thread(_effective_classifier, app)
         client, source_names = await asyncio.to_thread(_setup, app, provider)
-        result = await classify(client, model, app, source_names, history, message)
+        if app.classifier_purpose == "reply":
+            result = await classify_reply(client, model, app, history, message)
+        else:
+            result = await classify(client, model, app, source_names, history, message)
     except (ProviderError, LLMError, ClassifierError) as exc:
         log.warning("Classifier failed for app %s: %s", app.id, exc)
         if app.classifier_fail_open:
@@ -190,4 +193,5 @@ async def check_message(
     if result.verdict == "allowed":
         return Verdict(True, meta=meta, usage=usage)
     # Off-topic and abusive messages get the same reply, so probing reveals nothing.
+    # (NO_REPLY also uses it: for drafting apps it's the "nothing to draft" note staff see.)
     return Verdict(False, refusal_message(app), meta, usage)

@@ -111,6 +111,7 @@ export interface ChatAppInput {
   classifier_model: string | null;
   classifier_strictness: "lenient" | "balanced" | "strict";
   classifier_fail_open: boolean;
+  classifier_purpose: "scope" | "reply";
   temperature: number | null;
   seed: number | null;
   auto_route: boolean;

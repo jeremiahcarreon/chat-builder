@@ -200,6 +200,7 @@ function ApiAccess({ appId, base }: { appId: string; base: string }) {
   const response = `{
   "answer": "Yes. EC797 (2 row) has a 1.5 inch core...",
   "blocked": false,
+  "reason": null,
   "message_id": 812,
   "conversation_id": "…",
   "thread_id": "ebay-12345",
@@ -296,7 +297,9 @@ Http::withToken(config('services.chat_builder.key'))
           <div className="font-medium">Ask a question</div>
           <p className="text-slate-500">
             Send the same <code>thread_id</code> for follow-up messages in one conversation, so the answer has context.
-            Messages the guardrails refuse come back with <code>"blocked": true</code>. The optional <code>context</code>{" "}
+            Messages the guardrails refuse come back with <code>"blocked": true</code> and a <code>reason</code>:{" "}
+            <code>off_topic</code>, <code>abuse</code>, <code>rate_limited</code>, or <code>no_reply</code> when the classifier
+            checks whether a reply is expected and the sender isn't waiting for one. The optional <code>context</code>{" "}
             says who is asking: the model sees it, and it's sent to the app's MCP servers (in the request's{" "}
             <code>_meta</code> as <code>chat-builder/context</code>) so they can return only that person's records.
           </p>

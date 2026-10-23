@@ -146,6 +146,9 @@ class AnswerOut(BaseModel):
     answer: str
     # True when the guardrails refused the message (answer is the app's refusal message).
     blocked: bool
+    # Why it was blocked: "off_topic", "abuse", "no_reply" (the sender isn't expecting a reply,
+    # for apps whose classifier checks that) or "rate_limited". None when not blocked.
+    reason: str | None = None
     message_id: int | None
     conversation_id: uuid.UUID | None
     thread_id: str | None
@@ -200,6 +203,7 @@ async def answer(app_id: uuid.UUID, body: AnswerIn, key: ApiKey, db: DbSession):
     return AnswerOut(
         answer=(blocked if blocked is not None else text).strip(),
         blocked=blocked is not None,
+        reason=meta.get("blocked", {}).get("verdict") if blocked is not None else None,
         thread_id=body.thread_id,
         **out,
     )

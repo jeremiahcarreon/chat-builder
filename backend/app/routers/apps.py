@@ -65,6 +65,7 @@ class AppIn(BaseModel):
     classifier_model: str | None = Field(default=None, max_length=200)
     classifier_strictness: str = "balanced"
     classifier_fail_open: bool = True
+    classifier_purpose: str = "scope"
     auto_route: bool = False
     route_tiers: list[RouteTier] = Field(default_factory=list, max_length=MAX_TIERS)
     router: str = "jev"
@@ -102,6 +103,13 @@ class AppIn(BaseModel):
     def _strictness(cls, value: str) -> str:
         if value not in ("lenient", "balanced", "strict"):
             raise ValueError("Must be lenient, balanced or strict")
+        return value
+
+    @field_validator("classifier_purpose")
+    @classmethod
+    def _purpose(cls, value: str) -> str:
+        if value not in ("scope", "reply"):
+            raise ValueError("Must be scope or reply")
         return value
 
     @field_validator("name", "model")

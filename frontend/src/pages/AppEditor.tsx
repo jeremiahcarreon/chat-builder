@@ -33,6 +33,7 @@ const blank: ChatAppInput = {
   classifier_model: null,
   classifier_strictness: "balanced",
   classifier_fail_open: true,
+  classifier_purpose: "scope",
   temperature: null,
   seed: null,
   auto_route: false,
@@ -391,15 +392,41 @@ function GuardrailsCard({
         />
         {form.classifier_enabled && (
           <>
+            <Field
+              label="What the classifier checks"
+              hint={
+                form.classifier_purpose === "reply"
+                  ? "For apps that draft replies to messages people send (eBay buyers, tickets). Messages that don't need a reply, like a bare thanks, get the refusal message with \"no_reply\" as the reason, and nothing is drafted. The scope above still guides the main model."
+                  : "Off-topic and abusive messages get the refusal message and never reach the main model."
+              }
+            >
+              <Select
+                value={form.classifier_purpose}
+                onChange={(e) => set("classifier_purpose", e.target.value as ChatAppInput["classifier_purpose"])}
+              >
+                <option value="scope">The message is in scope</option>
+                <option value="reply">The sender is expecting a reply</option>
+              </Select>
+            </Field>
             <div className="grid gap-4 sm:grid-cols-3">
               <Field label="Strictness">
                 <Select
                   value={form.classifier_strictness}
                   onChange={(e) => set("classifier_strictness", e.target.value as ChatAppInput["classifier_strictness"])}
                 >
-                  <option value="lenient">Lenient: block only clear misuse</option>
-                  <option value="balanced">Balanced</option>
-                  <option value="strict">Strict: only clearly in-scope questions</option>
+                  {form.classifier_purpose === "reply" ? (
+                    <>
+                      <option value="lenient">Lenient: draft unless a reply is clearly not wanted</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="strict">Strict: draft only when a reply is clearly expected</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="lenient">Lenient: block only clear misuse</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="strict">Strict: only clearly in-scope questions</option>
+                    </>
+                  )}
                 </Select>
               </Field>
               <Field

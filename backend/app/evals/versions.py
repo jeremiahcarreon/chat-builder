@@ -34,6 +34,7 @@ VERSIONED_FIELDS = (
     "classifier_provider",
     "classifier_model",
     "classifier_strictness",
+    "classifier_purpose",
 )
 
 
