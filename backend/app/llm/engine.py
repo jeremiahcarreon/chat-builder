@@ -62,6 +62,9 @@ class ChatRequest:
     external_id: str | None = None
     # API calls: who is asking, as the calling system knows them (kept on the conversation).
     context: dict | None = None
+    # Keep only the text written after the last lookup, so notes the model writes between
+    # lookups ("Checking the catalog.") never end up in a reply another system sends on.
+    final_only: bool = False
 
 
 @dataclass
@@ -388,7 +391,7 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
         try:
             await generate(
                 app, prep.client, prep.provider, prep.model, prep.history, question, gen, queue.put,
-                effort=prep.effort, call_context=prep.call_context,
+                effort=prep.effort, call_context=prep.call_context, final_only=req.final_only,
             )
         finally:
             prep.usage.extend(gen.usage)
@@ -431,6 +434,7 @@ async def generate(
     usage_kind: str = "chat",
     effort: str | None = None,
     call_context: dict | None = None,
+    final_only: bool = False,
 ) -> Generation:
     """Answers one question: retrieval, the model call, and any data queries it makes.
 
@@ -504,6 +508,8 @@ async def generate(
             if round_number == MAX_TOOL_ROUNDS:
                 await on_text("\n\nI wasn't able to finish looking that up. Please try a more specific question.")
                 break
+            if final_only and gen.parts:
+                await on_reset()
             results: list[ToolResult] = []
             for call in result.tool_calls:
                 await emit({"type": "tool", "label": context_module.describe_call(ctx, call)})

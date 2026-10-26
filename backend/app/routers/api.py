@@ -171,6 +171,7 @@ async def answer(app_id: uuid.UUID, body: AnswerIn, key: ApiKey, db: DbSession):
         visitor_id=f"api:{key.id}",
         external_id=body.thread_id,
         context=body.context,
+        final_only=True,
     )
     db.close()
     text, blocked, error = "", None, None

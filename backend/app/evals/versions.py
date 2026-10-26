@@ -9,6 +9,7 @@ import hashlib
 import json
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.llm.prompt import PROMPT_TEMPLATE_VERSION, build_system_prompt
@@ -71,8 +72,20 @@ def current_version(db: Session, app: ChatApp) -> PromptVersion:
         system_prompt=build_system_prompt(app, has_documents=True, data_tools=True),
         content_hash=digest,
     )
-    db.add(version)
-    db.flush()
+    try:
+        with db.begin_nested():
+            db.add(version)
+    except IntegrityError:
+        # Another request recorded this number first, usually the same new settings.
+        existing = db.scalar(
+            select(PromptVersion)
+            .where(PromptVersion.app_id == app.id, PromptVersion.content_hash == digest)
+            .order_by(PromptVersion.number.desc())
+            .limit(1)
+        )
+        if existing is None:
+            raise
+        return existing
     return version
 
 
