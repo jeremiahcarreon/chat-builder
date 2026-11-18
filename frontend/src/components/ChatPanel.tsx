@@ -72,6 +72,22 @@ export function ChatPanel({
     else sessionStorage.removeItem(resumeKey(appId));
   }, [appId, compact, conversationId]);
 
+  // A held answer appears once a reviewer sends it: check back while one is waiting.
+  const waitingOnReview = !busy && conversationId !== null && messages.some((m) => m.held);
+  useEffect(() => {
+    if (!waitingOnReview || !conversationId) return;
+    const id = conversationId;
+    const timer = window.setInterval(async () => {
+      try {
+        const history = await api<ChatMessage[]>(`/api/chat/${appId}/conversations/${id}`);
+        setMessages((prev) => (history.length >= prev.length ? history : prev));
+      } catch {
+        // Try again on the next tick.
+      }
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [appId, conversationId, waitingOnReview]);
+
   async function openConversation(id: string) {
     if (busy) return;
     const history = await api<ChatMessage[]>(`/api/chat/${appId}/conversations/${id}`);
@@ -204,6 +220,9 @@ export function ChatPanel({
               break;
             case "blocked":
               updateLast((m) => ({ ...m, content: ev.message, blocked: true }));
+              break;
+            case "held":
+              updateLast((m) => ({ ...m, content: ev.message, held: true, can_improve: false }));
               break;
             case "error":
               updateLast((m) => ({ ...m, content: m.content || ev.message, error: !m.content }));
@@ -437,7 +456,9 @@ function MessageBubble({
     ? "border-red-200 bg-red-50 text-red-800"
     : message.blocked
       ? "border-amber-200 bg-amber-50 text-amber-900"
-      : "border-slate-200 bg-slate-50";
+      : message.held
+        ? "border-sky-200 bg-sky-50 text-sky-900"
+        : "border-slate-200 bg-slate-50";
   if (!message.content) return null;
   return (
     <div className="flex">
@@ -450,7 +471,12 @@ function MessageBubble({
         {rateable && typeof message.id === "number" && message.replaced !== undefined && (
           <ReasonChips appId={appId} answerId={message.replaced} />
         )}
-        {rateable && typeof message.id === "number" && !message.error && (
+        {message.held && (
+          <p className="mt-1 flex items-center gap-1 px-1 text-xs text-slate-500">
+            <Loader2 size={12} className="animate-spin" /> Waiting for a person to check this answer
+          </p>
+        )}
+        {rateable && typeof message.id === "number" && !message.error && !message.held && (
           <div className="flex flex-wrap items-center gap-x-3">
             <FeedbackBar message={message} appId={appId} onRated={onRated} />
             {message.can_improve && !message.blocked && (

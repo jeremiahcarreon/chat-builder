@@ -115,6 +115,7 @@ export interface ChatAppInput {
   temperature: number | null;
   seed: number | null;
   auto_route: boolean;
+  review_answers: boolean;
   route_tiers: RouteTier[];
   router: "jev" | "llm";
 }
@@ -155,6 +156,8 @@ export interface ChatMessage {
   content: string;
   blocked?: boolean;
   error?: boolean;
+  // Waiting for a person to review it; content is the notice shown meanwhile.
+  held?: boolean;
   rating?: 1 | -1 | null;
   feedback?: string | null;
   // Set live when automatic model choice picked the model (shown in the Try it tab).
@@ -174,6 +177,7 @@ export type ChatEvent =
   | { type: "tool"; label: string }
   | { type: "route"; model: string; effort: string | null; escalated: boolean; can_improve: boolean }
   | { type: "blocked"; message: string }
+  | { type: "held"; message: string }
   | { type: "error"; message: string }
   | { type: "done"; message_id: number };
 

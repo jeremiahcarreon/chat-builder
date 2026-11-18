@@ -183,6 +183,10 @@ class ChatApp(Base):
     # Automatic model choice (see app/llm/router.py): each question goes to the cheapest
     # tier that fits it, and moves up when the person isn't getting what they need.
     auto_route: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    # Hold answers to anonymous visitors (the public page, a public widget) until a person
+    # approves, edits or discards them in the Review tab. Signed-in people and API callers
+    # get answers straight away: API callers review on their own side.
+    review_answers: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     # Ordered cheapest first: [{"provider", "model", "efforts": [...], "use_for": ""}]
     route_tiers: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]", nullable=False)
     # jev | llm (the app's classifier model)

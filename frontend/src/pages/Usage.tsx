@@ -20,7 +20,7 @@ const VERDICT_LABELS: Record<string, string> = {
 
 const number = (n: number) => n.toLocaleString();
 
-function money(amount: number | null): string {
+export function money(amount: number | null): string {
   if (amount === null) return "–";
   if (amount > 0 && amount < 0.01) return "<$0.01";
   return amount.toLocaleString(undefined, { style: "currency", currency: "USD" });
@@ -121,7 +121,7 @@ export function Usage() {
   );
 }
 
-function StatTile({ label, value, detail }: { label: string; value: string; detail: string }) {
+export function StatTile({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="text-sm text-slate-500">{label}</div>

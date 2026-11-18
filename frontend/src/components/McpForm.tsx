@@ -25,8 +25,10 @@ export function McpForm({ appId, existing, onDone }: { appId: string; existing?:
   const [name, setName] = useState(existing?.name ?? "");
   const [url, setUrl] = useState(String(existing?.details.url ?? ""));
   const [token, setToken] = useState("");
+  // New servers default on; servers saved before this setting existed stay off until edited.
+  const [sendPerson, setSendPerson] = useState(existing ? existing.details.send_person === true : true);
   const [result, setResult] = useState<TestResult | null>(null);
-  const body = () => JSON.stringify({ name: name || "MCP server", url, token });
+  const body = () => JSON.stringify({ name: name || "MCP server", url, token, send_person: sendPerson });
 
   const test = useMutation({
     mutationFn: () =>
@@ -77,6 +79,22 @@ export function McpForm({ appId, existing, onDone }: { appId: string; existing?:
           <Input type="password" autoComplete="new-password" value={token} onChange={(e) => setToken(e.target.value)} />
         </Field>
       </div>
+
+      <label className="flex cursor-pointer items-start gap-3 text-sm">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={sendPerson}
+          onChange={(e) => setSendPerson(e.target.checked)}
+        />
+        <span>
+          <span className="font-medium">Tell the server who is asking</span>
+          <span className="block text-xs text-gray-500">
+            Sends the signed-in person's email and name with each tool call, so the server can answer with their own
+            permissions instead of the token's. Anonymous visitors and API calls send no one.
+          </span>
+        </span>
+      </label>
 
       <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
         Tools the server marks read-only are turned on; tools that might change data stay off until you turn them on.

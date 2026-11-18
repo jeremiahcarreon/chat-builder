@@ -42,7 +42,7 @@ class SourceOut(BaseModel):
 PUBLIC_CONFIG = {
     "filename", "size", "chunk_count", "page_count", "table_count", "row_count",
     "host", "port", "database", "username", "encryption", "require_tls", "schemas",
-    "query_timeout", "dirty_reads", "hidden_count", "skus", "url", "tool_count", "enabled_count", "lesson_count",
+    "query_timeout", "dirty_reads", "hidden_count", "skus", "url", "tool_count", "enabled_count", "lesson_count", "send_person",
 }
 
 
@@ -380,6 +380,9 @@ class McpIn(BaseModel):
     url: str = Field(min_length=1, max_length=2000)
     # Leave empty when editing to keep the saved token.
     token: str = Field(default="", max_length=4000)
+    # Send the signed-in person's email with each call, so the server can apply their own
+    # permissions (the ERP does when its token is allowed to act for people).
+    send_person: bool = True
 
     @field_validator("url")
     @classmethod
@@ -453,7 +456,7 @@ async def add_mcp(app_id: uuid.UUID, body: McpIn, db: DbSession, user: AdminUser
 
     owned_app(db, user, app_id)
     source = DataSource(id=uuid.uuid4(), app_id=app_id, kind="mcp", name=body.name.strip(), status="pending",
-                        config={"url": body.url})
+                        config={"url": body.url, "send_person": body.send_person})
     source.encrypted_secret = encrypt(body.token, secret_context(source.id)) if body.token else None
     db.add(source)
     db.commit()
@@ -468,7 +471,7 @@ async def update_mcp(source_id: uuid.UUID, body: McpIn, db: DbSession, user: Adm
 
     source = _mcp_source(db, user, source_id)
     source.name = body.name.strip()
-    source.config = {**source.config, "url": body.url}
+    source.config = {**source.config, "url": body.url, "send_person": body.send_person}
     if body.token:
         source.encrypted_secret = encrypt(body.token, secret_context(source.id))
     source.status = "pending"

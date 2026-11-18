@@ -11,6 +11,7 @@ import { ExportButton } from "../components/ExportDialog";
 import { DataSourcesTab } from "./DataSourcesTab";
 import { DeployTab } from "./DeployTab";
 import { QualityTab } from "./QualityTab";
+import { ReviewTab } from "./ReviewTab";
 
 const blank: ChatAppInput = {
   name: "",
@@ -37,11 +38,12 @@ const blank: ChatAppInput = {
   temperature: null,
   seed: null,
   auto_route: false,
+  review_answers: false,
   route_tiers: [],
   router: "jev",
 };
 
-type Tab = "settings" | "sources" | "chat" | "quality" | "deploy";
+type Tab = "settings" | "sources" | "chat" | "review" | "quality" | "deploy";
 
 export function AppEditor() {
   const { appId } = useParams();
@@ -93,6 +95,7 @@ export function AppEditor() {
             { id: "settings", label: "Settings" },
             { id: "sources", label: "Data sources" },
             { id: "chat", label: "Try it" },
+            { id: "review", label: "Review" },
             { id: "quality", label: "Quality" },
             { id: "deploy", label: "Deploy" },
           ]}
@@ -103,6 +106,7 @@ export function AppEditor() {
       {tab === "settings" && <AppSettingsForm initial={app} appId={app.id} />}
       {tab === "sources" && <DataSourcesTab appId={app.id} />}
       {tab === "chat" && <ChatPanel appId={app.id} showModel className="h-[70vh]" />}
+      {tab === "review" && <ReviewTab appId={app.id} reviewing={app.review_answers} />}
       {tab === "quality" && <QualityTab appId={app.id} />}
       {tab === "deploy" && <DeployTab appId={app.id} />}
     </div>
@@ -278,6 +282,12 @@ function AppSettingsForm({ initial, appId }: { initial: ChatAppInput; appId?: st
             onChange={(v) => set("strict_mode", v)}
             label="Strict mode"
             hint="Answer only from this app's documents and data. Say 'I don't know' instead of guessing."
+          />
+          <Toggle
+            checked={form.review_answers}
+            onChange={(v) => set("review_answers", v)}
+            label="Review answers to anonymous visitors"
+            hint="Visitors on the public page or a public widget see a short notice; the answer waits in the Review tab until someone sends, edits or discards it. Signed-in people and API callers get answers straight away."
           />
         </div>
       </Card>

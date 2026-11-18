@@ -271,7 +271,7 @@ SETTING_GROUPS = [
         "fields": (
             "in_scope", "out_of_scope", "refusal_message", "strict_mode", "classifier_enabled",
             "classifier_provider", "classifier_model", "classifier_strictness", "classifier_fail_open",
-            "classifier_purpose",
+            "classifier_purpose", "review_answers",
         ),
     },
     {

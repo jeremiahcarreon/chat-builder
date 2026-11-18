@@ -32,7 +32,10 @@ See [OVERVIEW.md](OVERVIEW.md) for the design.
 4. **Try it:** ask in-scope, off-topic and data questions.
 5. **Quality:** add a few test questions and run them; run them again after
    any change to the prompt or model.
-6. Turn on **Public chat page** to share the app's link.
+6. Turn on **Public chat page** to share the app's link. To check answers
+   before visitors see them, turn on **Review answers to anonymous visitors**:
+   they wait in the app's **Review** tab, which also shows how often answers
+   go out unchanged, how many are waiting, and what the app costs.
 
 ## Install
 

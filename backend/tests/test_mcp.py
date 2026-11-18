@@ -73,3 +73,36 @@ async def test_no_tools_is_an_error(monkeypatch):
 
     with pytest.raises(IngestError):
         await _index({"url": "u"}, [], monkeypatch)
+
+
+def test_call_meta_carries_context_and_the_signed_in_person():
+    meta = mcp.call_meta({"ebay_buyer": "b1"}, {"email": "rep@ccs.test", "name": "Rep", "id": "ignored"})
+    assert meta == {
+        "chat-builder/context": {"ebay_buyer": "b1"},
+        "chat-builder/user": {"email": "rep@ccs.test", "name": "Rep"},
+    }
+    assert mcp.call_meta(None, None) is None
+    # A person without an email is nobody the server could match.
+    assert mcp.call_meta(None, {"email": "", "name": "Anon"}) is None
+
+
+async def test_the_person_reaches_the_server_only_when_the_admin_turned_it_on(monkeypatch):
+    from app.llm import context
+    from app.llm.base import ToolCall
+
+    sent = []
+
+    async def fake_call_tool(url, token, name, arguments, ctx_context, person=None):
+        sent.append(person)
+        return "ok", False
+
+    tool = mcp.McpTool("src", "ERP", "get_pricing", "Pricing", "", {})
+    ctx = context.TurnContext(app=SimpleNamespace(), mcp_tools={tool.model_name: tool},
+                              person={"email": "picker@ccs.test", "name": "Picker"})
+    monkeypatch.setattr(mcp, "call_tool", fake_call_tool)
+    call = ToolCall(id="1", name=tool.model_name, arguments={"skus": ["CC161"]})
+
+    for send_person, expected in ((True, {"email": "picker@ccs.test", "name": "Picker"}), (False, None)):
+        monkeypatch.setattr(context, "_mcp_connection", lambda sid, sp=send_person: ("http://erp/mcp", "t", sp))
+        await context._run_mcp(ctx, call)
+        assert sent[-1] == expected

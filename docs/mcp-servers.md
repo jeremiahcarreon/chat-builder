@@ -45,6 +45,22 @@ Use it to limit results to that person, for example refusing an order that
 belongs to a different buyer. Chats from Chat Builder's own pages (staff using
 the dashboard or the widget) send no context.
 
+### The signed-in person
+
+When **Tell the server who is asking** is on for the server (the default for
+servers added from this version on), chats from signed-in people (admins,
+members, and people signed in by an embedding site) also send the person:
+
+```json
+"_meta": {"chat-builder/user": {"email": "rep@example.com", "name": "Sam Rep"}}
+```
+
+Use it to answer with that person's own permissions rather than the token's,
+so the assistant can never show someone more than they could see by signing in
+to your system. Refuse when you can't match the email to an account; don't
+fall back to the token's identity. Anonymous visitors and API calls send no
+person.
+
 ## How tools appear to the model
 
 Each tool is offered as `<server name>__<tool name>` (letters, digits, `_`

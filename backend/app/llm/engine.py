@@ -38,7 +38,8 @@ from app.llm.router import (
     tier_route,
 )
 from app.llm.sampling import Sampling
-from app.models import ChatApp, Conversation, Message, UsageEvent
+from app.models import ChatApp, Conversation, Message, UsageEvent, User
+from app.review import HELD, HELD_NOTICE, holds_answer, not_shown
 from app.providers import ProviderError
 from app.routing import LOCAL_PROVIDER, chat_model_for, load_cloud_switch
 
@@ -89,6 +90,8 @@ class Prepared:
     question: str = ""
     replaces: int | None = None
     call_context: dict = field(default_factory=dict)
+    # The signed-in person asking ({"email", "name"}), for MCP servers that apply their permissions.
+    person: dict | None = None
 
 
 @dataclass
@@ -121,6 +124,9 @@ def history_for(db, conversation_id: uuid.UUID, before_id: int) -> list[tuple[st
     turns: list[tuple[str, str]] = []
     for msg in reversed(rows):
         if msg.role not in ("user", "assistant") or msg.meta.get("excluded") or msg.meta.get("better_requested"):
+            continue
+        if not_shown(msg.meta):
+            # A draft still waiting for review, or one a reviewer discarded: never said to them.
             continue
         if turns and turns[-1][0] == msg.role:
             turns[-1] = (msg.role, turns[-1][1] + "\n\n" + msg.content)
@@ -206,6 +212,16 @@ def _prepare_better(db, app: ChatApp, req: ChatRequest) -> Prepared:
     return prepared
 
 
+def _person(db, user_id: uuid.UUID | None) -> dict | None:
+    """Who is chatting, as MCP servers are told: signed-in people only, never anonymous visitors."""
+    if user_id is None:
+        return None
+    user = db.get(User, user_id)
+    if user is None or not user.email:
+        return None
+    return {"email": user.email, "name": user.name or ""}
+
+
 def _prepared(db, app: ChatApp, conversation: Conversation, user_msg: Message, last_step: int | None) -> Prepared:
     prepared = Prepared(
         app=app,
@@ -214,6 +230,7 @@ def _prepared(db, app: ChatApp, conversation: Conversation, user_msg: Message, l
         history=history_for(db, conversation.id, user_msg.id),
         question=user_msg.content,
         call_context=dict(conversation.context or {}),
+        person=_person(db, conversation.user_id),
     )
     prepared.provider, prepared.model = chat_model_for(app, load_cloud_switch(db, app.owner_id))
     prepared.prompt_version_id = current_version(db, app).id
@@ -392,14 +409,21 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
             await generate(
                 app, prep.client, prep.provider, prep.model, prep.history, question, gen, queue.put,
                 effort=prep.effort, call_context=prep.call_context, final_only=req.final_only,
+                person=prep.person,
             )
         finally:
             prep.usage.extend(gen.usage)
             await queue.put(None)
 
     task = asyncio.create_task(converse())
+    # Anonymous visitors on an app that reviews answers see only progress until a person approves.
+    hold = holds_answer(app, req) and prep.replaces is None
     try:
         while (event := await queue.get()) is not None:
+            if hold and event["type"] in ("text", "reset"):
+                continue
+            if hold and event["type"] == "route":
+                event = {**event, "can_improve": False}
             yield event
     except BaseException:
         # The browser disconnected: stop generating and keep what was produced.
@@ -418,7 +442,12 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
         answer = "Sorry, I couldn't come up with an answer. Please try rephrasing the question."
         meta["error"] = "empty"
         yield {"type": "error", "message": answer}
+    held = hold and bool(answer) and not meta.get("error")
+    if held:
+        meta["review"] = {"status": HELD}
     message_id = await asyncio.to_thread(_finish, prep, answer or "(no answer)", meta, not answer or meta.get("error") == "empty")
+    if held:
+        yield {"type": "held", "message": HELD_NOTICE}
     yield {"type": "done", "message_id": message_id}
 
 
@@ -435,13 +464,14 @@ async def generate(
     effort: str | None = None,
     call_context: dict | None = None,
     final_only: bool = False,
+    person: dict | None = None,
 ) -> Generation:
     """Answers one question: retrieval, the model call, and any data queries it makes.
 
     Shared by live chat (which streams events through `emit`) and test runs.
     Errors are recorded in gen.meta["error"] rather than raised.
     """
-    ctx = await context_module.gather(app, question, history, call_context)
+    ctx = await context_module.gather(app, question, history, call_context, person)
     tools = context_module.tools_for(ctx)
     gen.meta.setdefault("tool_calls", [])
     gen.meta["sources"] = ctx.source_names

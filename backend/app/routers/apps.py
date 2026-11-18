@@ -67,6 +67,7 @@ class AppIn(BaseModel):
     classifier_fail_open: bool = True
     classifier_purpose: str = "scope"
     auto_route: bool = False
+    review_answers: bool = False
     route_tiers: list[RouteTier] = Field(default_factory=list, max_length=MAX_TIERS)
     router: str = "jev"
 

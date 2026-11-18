@@ -7,7 +7,10 @@ server marks read-only are on by default; tools that may change data start off.
 During a chat, the allowed tools are offered to the model next to sql_query,
 named "<source>__<tool>". Calls send the calling system's context (like the eBay
 buyer from the API's "context" field) in the request's _meta under
-"chat-builder/context", so the server can limit what it returns.
+"chat-builder/context", so the server can limit what it returns. When the admin
+turns on "send_person", calls also carry the signed-in person under
+"chat-builder/user" ({"email", "name"}) so the server can apply that person's own
+permissions instead of the token's.
 
 Config: {"url", "tools": [{name, title, description, input_schema, read_only}],
 "enabled": [tool names]}; the token is the source's encrypted secret.
@@ -32,6 +35,7 @@ log = logging.getLogger(__name__)
 
 MCP_KIND = "mcp"
 CONTEXT_META_KEY = "chat-builder/context"
+PERSON_META_KEY = "chat-builder/user"
 CONNECT_TIMEOUT = 15
 CALL_TIMEOUT = 60
 MAX_RESULT_CHARS = 20_000
@@ -156,9 +160,21 @@ def result_text(result) -> str:
     return text
 
 
-async def call_tool(url: str, token: str | None, name: str, arguments: dict, context: dict | None) -> tuple[str, bool]:
+def call_meta(context: dict | None, person: dict | None) -> dict | None:
+    """The tools/call _meta: the calling system's context, and the signed-in person if any."""
+    meta = {}
+    if context:
+        meta[CONTEXT_META_KEY] = context
+    if person and person.get("email"):
+        meta[PERSON_META_KEY] = {"email": person["email"], "name": person.get("name") or ""}
+    return meta or None
+
+
+async def call_tool(
+    url: str, token: str | None, name: str, arguments: dict, context: dict | None, person: dict | None = None
+) -> tuple[str, bool]:
     """(result text, is_error) for one tool call."""
-    meta = {CONTEXT_META_KEY: context} if context else None
+    meta = call_meta(context, person)
     async with _client(url, token, CALL_TIMEOUT) as client:
         result = await client.call_tool(name, arguments, meta=meta)
     return result_text(result), bool(result.is_error)

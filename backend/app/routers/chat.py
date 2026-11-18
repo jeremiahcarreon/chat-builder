@@ -17,6 +17,7 @@ from app.deps import DbSession
 from app.llm.engine import ChatAccessError, ChatRequest, run_chat
 from app.llm.router import can_improve
 from app.models import AppAccess, ChatApp, Conversation, Message, User
+from app.review import HELD, status_of, visible_content
 from app.security import SESSION_COOKIE, user_for_token
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -111,6 +112,8 @@ class MessageOut(BaseModel):
     content: str
     blocked: bool = False
     error: bool = False
+    # Waiting for a person to review it; content is the notice the visitor sees.
+    held: bool = False
     rating: int | None = None
     feedback: str | None = None
     # Automatic model choice can re-answer this one a step up ("Get a better answer").
@@ -185,12 +188,14 @@ def conversation_messages(
         MessageOut(
             id=m.id,
             role=m.role,
-            content=m.content,
+            content=visible_content(m) if m.role == "assistant" else m.content,
             blocked=bool(m.meta.get("blocked")),
             error=bool(m.meta.get("error")) and m.meta.get("excluded", False),
+            held=status_of(m.meta) == HELD,
             rating=m.rating,
             feedback=m.feedback,
-            can_improve=m.role == "assistant" and can_improve(access.app, m.meta.get("route", {}).get("step")),
+            can_improve=m.role == "assistant" and status_of(m.meta) is None
+            and can_improve(access.app, m.meta.get("route", {}).get("step")),
             created_at=m.created_at,
         )
         for m in rows
@@ -265,6 +270,9 @@ def rate_answer(app_id: uuid.UUID, message_id: int, body: FeedbackIn, request: R
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Message not found")
     # Only the person who had the conversation can rate it.
     _owned_conversation(db, access, message.conversation_id)
+    if status_of(message.meta) in (HELD, "discarded"):
+        # The visitor never saw this draft; the reviewer's decision is its rating.
+        raise HTTPException(status.HTTP_409_CONFLICT, "This answer is still being reviewed.")
     message.rating = body.rating
     message.feedback = (body.feedback or "").strip() or None
     message.rated_at = datetime.now(UTC)
@@ -272,7 +280,7 @@ def rate_answer(app_id: uuid.UUID, message_id: int, body: FeedbackIn, request: R
     return MessageOut(
         id=message.id,
         role=message.role,
-        content=message.content,
+        content=visible_content(message),
         blocked=bool(message.meta.get("blocked")),
         rating=message.rating,
         feedback=message.feedback,
