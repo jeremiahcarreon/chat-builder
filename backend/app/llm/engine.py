@@ -24,6 +24,7 @@ from sqlalchemy import func, select
 
 from app.db import SessionLocal
 from app import gate
+from app.edits import split_note
 from app.evals.versions import current_version
 from app.guardrails.limits import check_limits
 from app.guardrails.pipeline import check_message
@@ -417,7 +418,8 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
 
     async def gate_check(g: Generation) -> gate.Check:
         evidence = gate.evidence_text(app.knowledge_notes, g.excerpts, g.results, prep.call_context)
-        return await gate.check(app, question, g.text, evidence)
+        # Only what reaches the customer is checked; a staff note is for staff.
+        return await gate.check(app, question, split_note(g.text)[0], evidence)
 
     async def converse() -> None:
         try:

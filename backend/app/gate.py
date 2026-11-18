@@ -67,6 +67,8 @@ class GateSettings(BaseModel):
     window: int = Field(default=100, ge=10, le=2_000)
     # Share of answers from auto intents still held as spot checks.
     audit_rate: float = Field(default=0.1, ge=0.0, le=1.0)
+    # Edits up to this share of the draft's words (or short cuts) count as sent unchanged.
+    minor_edit: float = Field(default=0.05, ge=0.0, le=0.5)
 
     @field_validator("intents")
     @classmethod
@@ -99,6 +101,10 @@ stock, prices, dates, tracking, and policy terms. A claim is supported when the 
 it or it follows directly from it. Questions, greetings, apologies, offers to help, and saying \
 something wasn't found (when the evidence shows the search found nothing) are not claims.
 
+Also list, in the same way, any sentence written to staff or to the assistant itself rather than \
+to the customer ("Per guidance: ...", "Try other names.", "Check the order first."): those must \
+never reach the customer. Ignore the staff note, if the reply has one: it isn't sent.
+
 Also say which kind of question the reply answers, choosing exactly one of: {intents}.
 
 Reply with JSON only:
@@ -117,8 +123,8 @@ REWRITE = """A check found these statements in your reply that the lookups and d
 {claims}
 
 Write the reply again without them. Keep everything that is supported. Where a fact is missing, \
-say so plainly or ask the customer the one question that would settle it. Don't call any tools. \
-Write only the reply."""
+say so plainly or ask the customer the one question that would settle it. Keep any staff note \
+as it was. Don't call any tools. Write only the reply."""
 
 
 @dataclass
@@ -213,8 +219,26 @@ class IntentRecord:
         return round(self.sent / self.reviewed, 3) if self.reviewed else None
 
 
-def outcome_of(meta: dict) -> str | None:
-    """What a person did with an answer: reviewed here, or reported by an API caller."""
+def outcome_of(meta: dict, minor_edit: float | None = None, content: str = "") -> str | None:
+    """What a person did with an answer: reviewed here, or reported by an API caller. With
+    `minor_edit`, an edit that small counts as "sent": the draft was right."""
+    outcome = _outcome(meta)
+    if outcome == "edited" and minor_edit is not None:
+        from app.edits import is_minor
+        from app.review import edit_of
+
+        review = meta.get("review") if isinstance(meta.get("review"), dict) else None
+        if review and review.get("status") == "edited":
+            size = edit_of(review, review.get("original"), content)
+        else:
+            api = meta.get("api_outcome") or {}
+            size = edit_of(api, content, api.get("final_text"))
+        if is_minor(size, minor_edit):
+            return "sent"
+    return outcome
+
+
+def _outcome(meta: dict) -> str | None:
     review = meta.get("review")
     if isinstance(review, dict) and review.get("status") in ("sent", "edited", "discarded"):
         return review["status"]
@@ -222,9 +246,9 @@ def outcome_of(meta: dict) -> str | None:
     return outcome if outcome in ("sent", "edited", "discarded") else None
 
 
-def recent_outcomes(db, app: ChatApp, intent: str, window: int) -> list[str]:
-    rows = db.scalars(
-        select(Message.meta)
+def recent_outcomes(db, app: ChatApp, intent: str, window: int, minor_edit: float | None = None) -> list[str]:
+    rows = db.execute(
+        select(Message.meta, Message.content)
         .join(Conversation, Conversation.id == Message.conversation_id)
         .where(
             Conversation.app_id == app.id,
@@ -235,7 +259,7 @@ def recent_outcomes(db, app: ChatApp, intent: str, window: int) -> list[str]:
         .order_by(Message.id.desc())
         .limit(window * 2)
     ).all()
-    outcomes = [o for o in (outcome_of(meta) for meta in rows) if o]
+    outcomes = [o for o in (outcome_of(meta, minor_edit, content) for meta, content in rows) if o]
     return outcomes[:window]
 
 
@@ -248,7 +272,7 @@ def earned_tier(settings: GateSettings, outcomes: list[str]) -> str:
 
 def record_for(db, app: ChatApp, intent: str, settings: GateSettings | None = None) -> IntentRecord:
     settings = settings or settings_for(app)
-    outcomes = recent_outcomes(db, app, intent, settings.window)
+    outcomes = recent_outcomes(db, app, intent, settings.window, settings.minor_edit)
     pinned = settings.pinned.get(intent)
     tier = pinned or earned_tier(settings, outcomes)
     return IntentRecord(intent, tier, pinned is not None, len(outcomes), outcomes.count("sent"))

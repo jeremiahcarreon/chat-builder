@@ -22,6 +22,7 @@ from statistics import median
 
 from sqlalchemy import func, select
 
+from app.edits import SIZES, measure
 from app.models import ChatApp, Conversation, Message, UsageEvent, User
 from app.pricing import cost, load_custom, price_for
 
@@ -79,6 +80,7 @@ def decide(message: Message, decision: str, text: str | None, reviewer: User) ->
             raise ReviewError("Write the answer to send, or discard it.")
         if final != message.content.strip():
             review["original"] = message.content
+            review["edit"] = measure(message.content, final)
             message.content = final
             changed = final
         else:
@@ -108,6 +110,8 @@ class ReviewStats:
     median_review_minutes: float | None
     cost: float | None
     unpriced: list[str]
+    # Edits by size (see app/edits.py); edits recorded before sizes were measured aren't counted.
+    edit_sizes: dict[str, int]
 
     @property
     def reviewed(self) -> int:
@@ -117,15 +121,16 @@ class ReviewStats:
 def stats(db, app: ChatApp, days: int) -> ReviewStats:
     since = datetime.now(UTC) - timedelta(days=days)
     rows = db.execute(
-        select(Message.meta, Message.created_at, Conversation.visitor_id, Message.created_at >= since)
+        select(Message.meta, Message.created_at, Conversation.visitor_id, Message.created_at >= since, Message.content)
         .join(Conversation, Conversation.id == Message.conversation_id)
         .where(Conversation.app_id == app.id, Message.role == "assistant")
         .where((Message.created_at >= since) | (Message.meta["review"]["status"].astext == HELD))
     ).all()
     answers = blocked = held_now = awaiting = 0
     outcomes = {decision: 0 for decision in DECISIONS}
+    sizes = {name: 0 for name, _ in SIZES}
     minutes: list[float] = []
-    for meta, created_at, visitor_id, in_period in rows:
+    for meta, created_at, visitor_id, in_period, content in rows:
         status = status_of(meta)
         if status == HELD:
             held_now += 1
@@ -139,6 +144,7 @@ def stats(db, app: ChatApp, days: int) -> ReviewStats:
         answers += 1
         if status in DECISIONS:
             outcomes[status] += 1
+            _count_size(sizes, meta["review"], meta["review"].get("original"), content)
             at = meta["review"].get("at")
             if at:
                 minutes.append((datetime.fromisoformat(at) - created_at).total_seconds() / 60)
@@ -146,6 +152,7 @@ def stats(db, app: ChatApp, days: int) -> ReviewStats:
             outcome = (meta.get("api_outcome") or {}).get("outcome")
             if outcome in DECISIONS:
                 outcomes[outcome] += 1
+                _count_size(sizes, meta["api_outcome"], content, meta["api_outcome"].get("final_text"))
             else:
                 awaiting += 1
     total_cost, unpriced = _cost(db, app, since)
@@ -153,8 +160,23 @@ def stats(db, app: ChatApp, days: int) -> ReviewStats:
         days=days, answers=answers, blocked=blocked, held_now=held_now, awaiting_caller=awaiting,
         sent=outcomes["sent"], edited=outcomes["edited"], discarded=outcomes["discarded"],
         median_review_minutes=round(median(minutes), 1) if minutes else None,
-        cost=total_cost, unpriced=unpriced,
+        cost=total_cost, unpriced=unpriced, edit_sizes=sizes,
     )
+
+
+def edit_of(decision: dict, draft: str | None, final: str | None) -> dict | None:
+    """The edit's size: as recorded, or measured now for edits recorded before sizes were."""
+    if decision.get("edit"):
+        return decision["edit"]
+    if (decision.get("status") or decision.get("outcome")) == "edited" and draft and final:
+        return measure(draft, final)
+    return None
+
+
+def _count_size(sizes: dict[str, int], decision: dict, draft: str | None, final: str | None) -> None:
+    size = (edit_of(decision, draft, final) or {}).get("size")
+    if size in sizes:
+        sizes[size] += 1
 
 
 def _cost(db, app: ChatApp, since: datetime) -> tuple[float | None, list[str]]:

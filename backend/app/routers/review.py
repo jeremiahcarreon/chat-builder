@@ -72,6 +72,7 @@ class StatsOut(BaseModel):
     median_review_minutes: float | None
     cost: float | None
     unpriced: list[str]
+    edit_sizes: dict[str, int]
 
 
 @router.get("")

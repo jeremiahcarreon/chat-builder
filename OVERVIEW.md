@@ -301,7 +301,11 @@ chatting with that one app, never for the dashboard (even for admins).
   `final_text`) or `discarded` records what staff did with the draft. It shows
   as feedback in the Quality tab, and an edited reply becomes the reference
   answer when the answer is turned into a test. An optional `reviewed_by`
-  records who decided.
+  records who decided. Each edit is measured (share of the draft's words
+  changed, ignoring a staff note) as tiny, light, heavy or rewrite, so a fixed
+  typo isn't read as a wrong draft; the Review tab shows the split.
+- Answers also come split at a `STAFF NOTE:` line: `reply` is what goes to the
+  customer and `staff_note` is for staff.
 - `GET /api/v1/apps/{app}/metrics?days=30` returns volume, holds, hold reasons,
   review outcomes, cost and each kind of question's tier, for a dashboard in
   the calling system.
@@ -315,11 +319,13 @@ chatting with that one app, never for the dashboard (even for admins).
 - **Grounding:** a small model compares the answer's claims (part numbers,
   fitment, specs, stock, prices, dates, policy) with the lookup results,
   document excerpts and notes. An unsupported claim gets one rewrite without
-  it; if one remains, the answer is held.
+  it; if one remains, the answer is held. Sentences meant for staff rather
+  than the customer ("Per guidance: ...") are caught the same way.
 - **Earned autonomy:** the same pass labels the kind of question (from the
   app's list, like "fitment" or "order status"). Each kind needs approval until
   people have sent enough of its held answers unchanged (95% of the last 100,
-  at least 50, by default). After that it goes out on its own, with a share
+  at least 50, by default; an edit of 5% of the words or less, or a short cut,
+  counts as unchanged). After that it goes out on its own, with a share
   still held as spot checks so a kind that slips goes back to approval. Admins
   can pin a kind either way in the Review tab.
 - API answers carry the verdict in `review`: `{"status": "auto" | "hold",

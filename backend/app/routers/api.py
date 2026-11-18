@@ -6,7 +6,8 @@ stored only as a hash. Calls send it as "Authorization: Bearer cbk_...".
     POST /api/v1/apps/{app_id}/answer
         {"message": "...", "thread_id": "ebay-123"}  ->  {"answer": "...", "message_id": 42, ...}
         Messages with the same thread_id continue one conversation, so follow-ups
-        have context. The answer goes through the same guardrails, data queries and
+        have context. "reply" is the answer without its staff note (from a
+        "STAFF NOTE:" line on), which comes separately in "staff_note". The answer goes through the same guardrails, data queries and
         automatic model choice as the chat page.
 
         With the review gate on, "review" says whether the answer can go out on its own
@@ -38,6 +39,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from app import gate
+from app.edits import measure, split_note
 from app.db import SessionLocal
 from app.deps import AdminUser, DbSession
 from app.llm.engine import ChatAccessError, ChatRequest, run_chat
@@ -155,6 +157,9 @@ class AnswerIn(BaseModel):
 
 class AnswerOut(BaseModel):
     answer: str
+    # The answer split at a "STAFF NOTE:" line: what goes to the customer, and what's for staff.
+    reply: str = ""
+    staff_note: str | None = None
     # True when the guardrails refused the message (answer is the app's refusal message).
     blocked: bool
     # Why it was blocked: "off_topic", "abuse", "no_reply" (the sender isn't expecting a reply,
@@ -217,8 +222,12 @@ async def answer(app_id: uuid.UUID, body: AnswerIn, key: ApiKey, db: DbSession):
     if error and not text.strip():
         # The model provider failed (bad key, outage): nothing usable to draft from.
         return JSONResponse({"detail": error, "message_id": out["message_id"]}, status_code=status.HTTP_502_BAD_GATEWAY)
+    answer = (blocked if blocked is not None else text).strip()
+    reply, staff_note = split_note(answer)
     return AnswerOut(
-        answer=(blocked if blocked is not None else text).strip(),
+        answer=answer,
+        reply=reply,
+        staff_note=staff_note,
         blocked=blocked is not None,
         reason=meta.get("blocked", {}).get("verdict") if blocked is not None else None,
         thread_id=body.thread_id,
@@ -259,6 +268,8 @@ async def record_outcome(app_id: uuid.UUID, message_id: int, body: OutcomeIn, ke
     outcome = {"outcome": body.outcome, "final_text": final_text or None, "at": datetime.now(UTC).isoformat()}
     if body.reviewed_by and body.reviewed_by.strip():
         outcome["by"] = body.reviewed_by.strip()
+    if final_text:
+        outcome["edit"] = measure(message.content, final_text)
     message.meta = {**message.meta, "api_outcome": outcome}
     # Sent as drafted counts as helpful; edited or unused as not.
     message.rating = 1 if body.outcome == "sent" else -1
@@ -331,6 +342,8 @@ class MetricsOut(BaseModel):
     sent: int
     edited: int
     discarded: int
+    # Edits by size: {"tiny", "light", "heavy", "rewrite"} (see app/edits.py).
+    edit_sizes: dict[str, int]
     cost: float | None
     # Why answers were held, most common first: [{"reason", "count"}].
     hold_reasons: list[dict]
@@ -373,7 +386,7 @@ def gate_metrics(db, app: ChatApp, days: int) -> dict:
     return {
         "days": days, "answers": base.answers, "blocked": base.blocked, "auto": auto, "held": held,
         "waiting": waiting, "sent": base.sent, "edited": base.edited, "discarded": base.discarded,
-        "cost": base.cost,
+        "edit_sizes": base.edit_sizes, "cost": base.cost,
         "hold_reasons": [{"reason": r, "count": n} for r, n in sorted(reasons.items(), key=lambda x: -x[1])],
         "intents": [IntentOut(**r.__dict__, sent_rate=r.sent_rate) for r in gate.records(db, app)],
     }

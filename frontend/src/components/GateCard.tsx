@@ -57,7 +57,7 @@ export function GateCard({
                 }}
               />
             </Field>
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Sent unchanged (%)" hint="Share of held answers sent as written that earns “auto”.">
                 <Input
                   type="number"
@@ -74,6 +74,15 @@ export function GateCard({
                   max={1000}
                   value={gate.min_samples}
                   onChange={(e) => set("min_samples", Math.min(1000, Math.max(5, Number(e.target.value) || 50)))}
+                />
+              </Field>
+              <Field label="Minor edit (% of words)" hint="Edits this small (or short cuts) count as sent unchanged.">
+                <Input
+                  type="number"
+                  min={0}
+                  max={50}
+                  value={Math.round(gate.minor_edit * 100)}
+                  onChange={(e) => set("minor_edit", Math.min(50, Math.max(0, Number(e.target.value) || 0)) / 100)}
                 />
               </Field>
               <Field label="Spot checks (%)" hint="Share of “auto” answers still held, so the record stays current.">

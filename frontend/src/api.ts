@@ -130,6 +130,7 @@ export interface GateSettings {
   min_samples: number;
   window: number;
   audit_rate: number;
+  minor_edit: number;
 }
 
 export const defaultGate: GateSettings = {
@@ -140,6 +141,7 @@ export const defaultGate: GateSettings = {
   min_samples: 50,
   window: 100,
   audit_rate: 0.1,
+  minor_edit: 0.05,
 };
 
 /** One model in an app's automatic-model-choice ladder (cheapest first). */

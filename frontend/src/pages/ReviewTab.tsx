@@ -48,6 +48,7 @@ interface ReviewStats {
   median_review_minutes: number | null;
   cost: number | null;
   unpriced: string[];
+  edit_sizes: Record<"tiny" | "light" | "heavy" | "rewrite", number>;
 }
 
 function percent(part: number, whole: number): string {
@@ -132,6 +133,8 @@ export function ReviewTab({ appId, reviewing, gated }: { appId: string; reviewin
       )}
 
       {gated && overview && <GateSection appId={appId} overview={overview} />}
+
+      {stats && stats.edited > 0 && <EditSizes sizes={stats.edit_sizes} edited={stats.edited} />}
 
       <Card
         title={`Held answers${held?.length ? ` (${held.length})` : ""}`}
@@ -331,6 +334,51 @@ function GateSection({ appId, overview }: { appId: string; overview: GateOvervie
             </tbody>
           </table>
         </div>
+      </div>
+    </Card>
+  );
+}
+
+const SIZE_LABELS = [
+  ["tiny", "Tiny", "5% of words or less"],
+  ["light", "Light", "up to 25%"],
+  ["heavy", "Heavy", "up to 60%"],
+  ["rewrite", "Rewritten", "more than 60%"],
+] as const;
+
+/** How much the edited answers changed, ignoring staff notes: a typo fix isn't a wrong draft. */
+function EditSizes({ sizes, edited }: { sizes: ReviewStats["edit_sizes"]; edited: number }) {
+  const measured = Object.values(sizes).reduce((a, b) => a + b, 0);
+  return (
+    <Card
+      title="How much was edited"
+      description="Share of each draft's words people changed before sending, not counting a staff note they removed."
+    >
+      <div className="space-y-2">
+        <div className="flex h-3 overflow-hidden rounded-full bg-slate-100">
+          {SIZE_LABELS.map(([key], i) => (
+            <div
+              key={key}
+              style={{ width: `${measured ? (sizes[key] / measured) * 100 : 0}%` }}
+              className={["bg-emerald-400", "bg-lime-400", "bg-amber-400", "bg-red-400"][i]}
+            />
+          ))}
+        </div>
+        <dl className="grid gap-2 text-sm sm:grid-cols-4">
+          {SIZE_LABELS.map(([key, label, hint]) => (
+            <div key={key}>
+              <dt className="text-slate-500">
+                {label} <span className="text-xs">({hint})</span>
+              </dt>
+              <dd className="font-medium tabular-nums">
+                {sizes[key]} <span className="text-xs font-normal text-slate-500">{percent(sizes[key], measured)}</span>
+              </dd>
+            </div>
+          ))}
+        </dl>
+        {measured < edited && (
+          <p className="text-xs text-slate-500">{edited - measured} edited without the sent text, so not measured.</p>
+        )}
       </div>
     </Card>
   );
