@@ -116,9 +116,31 @@ export interface ChatAppInput {
   seed: number | null;
   auto_route: boolean;
   review_answers: boolean;
+  gate: GateSettings;
   route_tiers: RouteTier[];
   router: "jev" | "llm";
 }
+
+/** The review gate: hold only the answers that need a person (see backend app/gate.py). */
+export interface GateSettings {
+  enabled: boolean;
+  intents: string[];
+  pinned: Record<string, "auto" | "approval">;
+  threshold: number;
+  min_samples: number;
+  window: number;
+  audit_rate: number;
+}
+
+export const defaultGate: GateSettings = {
+  enabled: false,
+  intents: [],
+  pinned: {},
+  threshold: 0.95,
+  min_samples: 50,
+  window: 100,
+  audit_rate: 0.1,
+};
 
 /** One model in an app's automatic-model-choice ladder (cheapest first). */
 export interface RouteTier {

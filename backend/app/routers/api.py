@@ -9,10 +9,18 @@ stored only as a hash. Calls send it as "Authorization: Bearer cbk_...".
         have context. The answer goes through the same guardrails, data queries and
         automatic model choice as the chat page.
 
+        With the review gate on, "review" says whether the answer can go out on its own
+        ("auto") or needs a person ("hold"), and why (see app/gate.py).
+
     POST /api/v1/apps/{app_id}/messages/{message_id}/outcome
-        {"outcome": "sent" | "edited" | "discarded", "final_text": "..."}
+        {"outcome": "sent" | "edited" | "discarded", "final_text": "...", "reviewed_by": "..."}
         What staff did with the draft. It shows in the Quality tab as feedback, and an
-        edited reply becomes the reference answer when it's turned into a test.
+        edited reply becomes the reference answer when it's turned into a test. Outcomes
+        of held answers are what let an intent earn "auto".
+
+    GET /api/v1/apps/{app_id}/metrics?days=30
+        Volume, holds, review outcomes, cost, and each intent's tier, for a dashboard
+        in the calling system.
 
 A key can only reach its own app's API: never the dashboard, other apps, or settings.
 """
@@ -29,6 +37,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
+from app import gate
 from app.db import SessionLocal
 from app.deps import AdminUser, DbSession
 from app.llm.engine import ChatAccessError, ChatRequest, run_chat
@@ -158,6 +167,9 @@ class AnswerOut(BaseModel):
     effort: str | None
     # Data the answer used: "Querying Catalog" and the like.
     lookups: list[str]
+    # The review gate's verdict, when the app has the gate on: {"status": "auto" | "hold",
+    # "intent", "tier", "risk", "grounded", "unsupported", "rewritten", "reasons"}.
+    review: dict | None = None
 
 
 @router.post("/api/v1/apps/{app_id}/answer", response_model=AnswerOut)
@@ -175,7 +187,7 @@ async def answer(app_id: uuid.UUID, body: AnswerIn, key: ApiKey, db: DbSession):
     )
     db.close()
     text, blocked, error = "", None, None
-    out = {"message_id": None, "conversation_id": None, "model": None, "effort": None, "lookups": []}
+    out = {"message_id": None, "conversation_id": None, "model": None, "effort": None, "lookups": [], "review": None}
     try:
         async for event in run_chat(chat_request):
             match event["type"]:
@@ -187,6 +199,8 @@ async def answer(app_id: uuid.UUID, body: AnswerIn, key: ApiKey, db: DbSession):
                     text = ""
                 case "tool":
                     out["lookups"].append(event["label"])
+                case "gate":
+                    out["review"] = {k: v for k, v in event.items() if k != "type"}
                 case "blocked":
                     blocked = event["message"]
                 case "error":
@@ -224,6 +238,8 @@ class OutcomeIn(BaseModel):
     outcome: Literal["sent", "edited", "discarded"]
     # What was actually sent, when it was edited.
     final_text: str | None = Field(default=None, max_length=20_000)
+    # Who decided, as your system knows them (a username or email), for the dashboard.
+    reviewed_by: str | None = Field(default=None, max_length=200)
 
 
 class OutcomeOut(BaseModel):
@@ -240,7 +256,10 @@ async def record_outcome(app_id: uuid.UUID, message_id: int, body: OutcomeIn, ke
     if message is None or message.role != "assistant" or conversation.app_id != app_id or not api_conversation:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Answer not found")
     final_text = (body.final_text or "").strip() if body.outcome == "edited" else ""
-    message.meta = {**message.meta, "api_outcome": {"outcome": body.outcome, "final_text": final_text or None}}
+    outcome = {"outcome": body.outcome, "final_text": final_text or None, "at": datetime.now(UTC).isoformat()}
+    if body.reviewed_by and body.reviewed_by.strip():
+        outcome["by"] = body.reviewed_by.strip()
+    message.meta = {**message.meta, "api_outcome": outcome}
     # Sent as drafted counts as helpful; edited or unused as not.
     message.rating = 1 if body.outcome == "sent" else -1
     message.feedback = OUTCOME_LABELS[body.outcome]
@@ -287,3 +306,74 @@ async def teach(app_id: uuid.UUID, body: LessonIn, key: ApiKey, db: DbSession) -
     await _queue_lesson(app_id, body.customer_message.strip(), body.reply.strip(), body.draft, body.context,
                         {"origin": "api"})
     return {"queued": True}
+
+
+class IntentOut(BaseModel):
+    intent: str
+    # "auto" (goes out on its own, with spot checks) or "approval".
+    tier: str
+    # Fixed by an admin rather than earned.
+    pinned: bool
+    reviewed: int
+    sent: int
+    sent_rate: float | None
+
+
+class MetricsOut(BaseModel):
+    days: int
+    answers: int
+    blocked: int
+    # Answers the gate let through and answers it held, in the period.
+    auto: int
+    held: int
+    # Held answers still waiting for a decision (here or by the caller).
+    waiting: int
+    sent: int
+    edited: int
+    discarded: int
+    cost: float | None
+    # Why answers were held, most common first: [{"reason", "count"}].
+    hold_reasons: list[dict]
+    intents: list[IntentOut]
+
+
+@router.get("/api/v1/apps/{app_id}/metrics")
+def metrics(app_id: uuid.UUID, key: ApiKey, db: DbSession, days: int = 30) -> MetricsOut:
+    """The review numbers for a dashboard in the calling system (like the ERP)."""
+    days = max(1, min(days, 365))
+    app = db.get(ChatApp, app_id)
+    return MetricsOut(**gate_metrics(db, app, days))
+
+
+def gate_metrics(db, app: ChatApp, days: int) -> dict:
+    from app.review import stats
+
+    base = stats(db, app, days)
+    since = datetime.now(UTC) - timedelta(days=days)
+    rows = db.scalars(
+        select(Message.meta)
+        .join(Conversation, Conversation.id == Message.conversation_id)
+        .where(Conversation.app_id == app.id, Message.role == "assistant", Message.created_at >= since,
+               Message.meta["gate"].is_not(None))
+    ).all()
+    auto = held = waiting = 0
+    reasons: dict[str, int] = {}
+    for meta in rows:
+        verdict = meta.get("gate") or {}
+        if verdict.get("status") == gate.AUTO:
+            auto += 1
+            continue
+        held += 1
+        if gate.outcome_of(meta) is None:
+            waiting += 1
+        for reason in verdict.get("reasons", []):
+            # "Not supported by the lookups: ..." and the like group under their opening words.
+            label = reason.split(":")[0].split(" (")[0]
+            reasons[label] = reasons.get(label, 0) + 1
+    return {
+        "days": days, "answers": base.answers, "blocked": base.blocked, "auto": auto, "held": held,
+        "waiting": waiting, "sent": base.sent, "edited": base.edited, "discarded": base.discarded,
+        "cost": base.cost,
+        "hold_reasons": [{"reason": r, "count": n} for r, n in sorted(reasons.items(), key=lambda x: -x[1])],
+        "intents": [IntentOut(**r.__dict__, sent_rate=r.sent_rate) for r in gate.records(db, app)],
+    }

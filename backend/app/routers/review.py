@@ -3,6 +3,8 @@
     GET  /api/apps/{app_id}/review              held answers, oldest first
     POST /api/apps/{app_id}/review/{message_id} {"decision": "sent" | "edited" | "discarded", "text": "..."}
     GET  /api/apps/{app_id}/review/stats?days=30
+    GET  /api/apps/{app_id}/review/gate?days=30  the review gate: holds, reasons and each intent's tier
+    PUT  /api/apps/{app_id}/review/intents/{intent}  {"tier": "auto" | "approval" | null} pin or unpin
 """
 
 import uuid
@@ -13,11 +15,12 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from app import gate
 from app.deps import AdminUser, DbSession
 from app.lessons import question_for
 from app.models import Conversation, Message
 from app.review import HELD, ReviewError, decide, stats
-from app.routers.api import OUTCOME_LABELS, _queue_lesson
+from app.routers.api import OUTCOME_LABELS, MetricsOut, _queue_lesson, gate_metrics
 from app.routers.apps import owned_app
 
 router = APIRouter(prefix="/api/apps/{app_id}/review", tags=["review"])
@@ -40,6 +43,9 @@ class HeldAnswer(BaseModel):
     sources: list[str]
     model: str | None
     created_at: datetime
+    # Why the review gate held it (empty when the app holds every answer).
+    reasons: list[str] = []
+    intent: str | None = None
 
 
 class DecisionIn(BaseModel):
@@ -93,6 +99,8 @@ def held_answers(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> list[Held
             sources=list(m.meta.get("sources", [])),
             model=m.meta.get("model"),
             created_at=m.created_at,
+            reasons=list((m.meta.get("gate") or {}).get("reasons", [])),
+            intent=(m.meta.get("gate") or {}).get("intent"),
         )
         for m in rows
     ]
@@ -125,3 +133,27 @@ def review_stats(app_id: uuid.UUID, db: DbSession, user: AdminUser, days: int = 
     app = owned_app(db, user, app_id)
     result = stats(db, app, days)
     return StatsOut(**{**result.__dict__, "reviewed": result.reviewed})
+
+
+@router.get("/gate")
+def gate_overview(app_id: uuid.UUID, db: DbSession, user: AdminUser, days: int = Query(30, ge=1, le=365)) -> MetricsOut:
+    app = owned_app(db, user, app_id)
+    return MetricsOut(**gate_metrics(db, app, days))
+
+
+class PinIn(BaseModel):
+    # None lets the intent earn its tier again.
+    tier: Literal["auto", "approval"] | None
+
+
+@router.put("/intents/{intent}")
+def pin_intent(app_id: uuid.UUID, intent: str, body: PinIn, db: DbSession, user: AdminUser) -> dict:
+    app = owned_app(db, user, app_id)
+    settings = gate.settings_for(app)
+    name = " ".join(intent.split()).lower()[:60]
+    pinned = {k: v for k, v in settings.pinned.items() if k != name}
+    if body.tier is not None:
+        pinned[name] = body.tier
+    app.gate = settings.model_copy(update={"pinned": pinned}).model_dump()
+    db.commit()
+    return {"intent": name, "tier": body.tier}

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Plug, XCircle } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { api, type DataSource } from "../api";
-import { Button, Card, Field, Input } from "./ui";
+import { Button, Card, Field, Input, Select } from "./ui";
 
 export interface McpTool {
   name: string;
@@ -10,7 +10,10 @@ export interface McpTool {
   description: string;
   read_only: boolean;
   enabled: boolean;
+  risk: Risk;
 }
+
+type Risk = "read" | "reversible" | "irreversible";
 
 interface TestResult {
   ok: boolean;
@@ -176,8 +179,8 @@ export function McpToolsPanel({ sourceId }: { sourceId: string }) {
     queryFn: () => api<McpTool[]>(`/api/sources/${sourceId}/mcp/tools`),
   });
   const save = useMutation({
-    mutationFn: (enabled: string[]) =>
-      api<McpTool[]>(`/api/sources/${sourceId}/mcp/tools`, { method: "PUT", body: JSON.stringify({ enabled }) }),
+    mutationFn: ({ enabled, risk }: { enabled: string[]; risk?: Record<string, Risk> }) =>
+      api<McpTool[]>(`/api/sources/${sourceId}/mcp/tools`, { method: "PUT", body: JSON.stringify({ enabled, risk }) }),
     onSuccess: (updated) => {
       queryClient.setQueryData(["mcp-tools", sourceId], updated);
       queryClient.invalidateQueries({ queryKey: ["sources"] });
@@ -187,7 +190,15 @@ export function McpToolsPanel({ sourceId }: { sourceId: string }) {
   function toggle(tool: McpTool, on: boolean) {
     if (on && !tool.read_only && !confirm(`"${tool.title}" may change data in the other system. Let the assistant use it?`)) return;
     const enabled = (tools ?? []).filter((t) => (t.name === tool.name ? on : t.enabled)).map((t) => t.name);
-    save.mutate(enabled);
+    save.mutate({ enabled });
+  }
+
+  function setRisk(tool: McpTool, risk: Risk) {
+    const all = tools ?? [];
+    save.mutate({
+      enabled: all.filter((t) => t.enabled).map((t) => t.name),
+      risk: Object.fromEntries(all.map((t) => [t.name, t.name === tool.name ? risk : t.risk])),
+    });
   }
 
   if (!tools) return null;
@@ -214,6 +225,22 @@ export function McpToolsPanel({ sourceId }: { sourceId: string }) {
                 {t.description && <span className="block text-xs text-slate-500">{t.description}</span>}
               </span>
             </label>
+            {t.enabled && (
+              <div className="ml-7 mt-1 flex items-center gap-2 text-xs text-slate-500">
+                <span>For the review gate, calling it</span>
+                <Select
+                  aria-label={`What ${t.title} can do`}
+                  className="!w-auto py-0.5 text-xs"
+                  value={t.risk}
+                  disabled={save.isPending}
+                  onChange={(e) => setRisk(t, e.target.value as Risk)}
+                >
+                  <option value="read">only reads</option>
+                  <option value="reversible">changes data that can be undone</option>
+                  <option value="irreversible">changes data that can’t be undone (holds the answer)</option>
+                </Select>
+              </div>
+            )}
           </li>
         ))}
       </ul>

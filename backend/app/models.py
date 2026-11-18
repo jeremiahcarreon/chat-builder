@@ -187,6 +187,9 @@ class ChatApp(Base):
     # approves, edits or discards them in the Review tab. Signed-in people and API callers
     # get answers straight away: API callers review on their own side.
     review_answers: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    # The review gate (see app/gate.py): hold only answers that need a person. Applies to API
+    # calls, and to anonymous visitors when review_answers is on.
+    gate: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}", nullable=False)
     # Ordered cheapest first: [{"provider", "model", "efforts": [...], "use_for": ""}]
     route_tiers: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]", nullable=False)
     # jev | llm (the app's classifier model)

@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 
 from app.deps import AdminUser, DbSession
 from app.evals.versions import current_version
+from app.gate import GateSettings, settings_for
 from app.llm.router import MAX_TIERS, ladder
 from app.llm.sampling import EFFORTS
 from app.models import ChatApp, Conversation, DataSource
@@ -68,6 +69,7 @@ class AppIn(BaseModel):
     classifier_purpose: str = "scope"
     auto_route: bool = False
     review_answers: bool = False
+    gate: GateSettings = Field(default_factory=GateSettings)
     route_tiers: list[RouteTier] = Field(default_factory=list, max_length=MAX_TIERS)
     router: str = "jev"
 
@@ -200,8 +202,11 @@ def get_app(app_id: uuid.UUID, db: DbSession, user: AdminUser) -> AppOut:
 def update_app(app_id: uuid.UUID, body: AppIn, db: DbSession, user: AdminUser) -> AppOut:
     app = owned_app(db, user, app_id)
     check_routing(db, body)
+    pinned = settings_for(app).pinned
     for name, value in body.model_dump().items():
         setattr(app, name, value)
+    # Pins are set from the Review tab; a settings form opened before a pin mustn't undo it.
+    app.gate = {**app.gate, "pinned": pinned}
     db.flush()
     current_version(db, app)
     db.commit()

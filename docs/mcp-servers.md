@@ -18,6 +18,10 @@ whoever builds that server.
   possibly changing data and stay off until an admin turns them on (and
   confirms). Don't rely on that alone: the token should only reach read-only
   tools.
+- **Destructive hints:** for tools that change data, set `destructiveHint:
+  false` when the change can be undone (a note, a draft). The review gate
+  holds answers that used a tool without it. Admins can override either hint
+  per tool in the tool list.
 - **Results:** text content is passed to the model as is (structured content
   is used when there's no text). Up to 20,000 characters per result are kept.
   Return `isError: true` with a readable message for problems the model can

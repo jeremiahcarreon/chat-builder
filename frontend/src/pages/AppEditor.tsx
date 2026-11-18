@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { api, type ChatApp, type ChatAppInput, type CloudSwitch, type ProviderKey } from "../api";
+import { api, defaultGate, type ChatApp, type ChatAppInput, type CloudSwitch, type ProviderKey } from "../api";
+import { GateCard } from "../components/GateCard";
 import { RoutingCard } from "../components/RoutingCard";
 import { ChatPanel } from "../components/ChatPanel";
 import { Button, Card, Field, Input, Select, Tabs, Textarea, Toggle } from "../components/ui";
@@ -39,6 +40,7 @@ const blank: ChatAppInput = {
   seed: null,
   auto_route: false,
   review_answers: false,
+  gate: defaultGate,
   route_tiers: [],
   router: "jev",
 };
@@ -106,7 +108,7 @@ export function AppEditor() {
       {tab === "settings" && <AppSettingsForm initial={app} appId={app.id} />}
       {tab === "sources" && <DataSourcesTab appId={app.id} />}
       {tab === "chat" && <ChatPanel appId={app.id} showModel className="h-[70vh]" />}
-      {tab === "review" && <ReviewTab appId={app.id} reviewing={app.review_answers} />}
+      {tab === "review" && <ReviewTab appId={app.id} reviewing={app.review_answers} gated={!!app.gate?.enabled} />}
       {tab === "quality" && <QualityTab appId={app.id} />}
       {tab === "deploy" && <DeployTab appId={app.id} />}
     </div>
@@ -291,6 +293,8 @@ function AppSettingsForm({ initial, appId }: { initial: ChatAppInput; appId?: st
           />
         </div>
       </Card>
+
+      <GateCard gate={form.gate ?? defaultGate} reviewing={form.review_answers} onChange={(g) => set("gate", g)} />
 
       <GuardrailsCard form={form} set={set} providers={providers} />
 

@@ -33,7 +33,12 @@ DISCARDED_NOTICE = "Thanks for your question. A member of our team will follow u
 
 def holds_answer(app: ChatApp, req) -> bool:
     """Whether this chat's answer waits for review: anonymous visitors on a reviewing app only."""
-    return bool(app.review_answers) and req.user_id is None and req.external_id is None
+    return bool(app.review_answers) and req.user_id is None and not is_api(req)
+
+
+def is_api(req) -> bool:
+    """An API call (its thread ID is optional, so the API's visitor ID is what marks it)."""
+    return req.external_id is not None or (req.visitor_id or "").startswith("api:")
 
 
 def status_of(meta: dict) -> str | None:

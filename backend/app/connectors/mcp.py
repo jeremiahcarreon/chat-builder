@@ -12,8 +12,10 @@ turns on "send_person", calls also carry the signed-in person under
 "chat-builder/user" ({"email", "name"}) so the server can apply that person's own
 permissions instead of the token's.
 
-Config: {"url", "tools": [{name, title, description, input_schema, read_only}],
-"enabled": [tool names]}; the token is the source's encrypted secret.
+Config: {"url", "tools": [{name, title, description, input_schema, read_only, destructive}],
+"enabled": [tool names], "risk": {tool name: "read" | "reversible" | "irreversible"}};
+the token is the source's encrypted secret. "risk" holds the admin's overrides of what the
+server's hints say a tool can do (see app/gate.py).
 """
 
 import asyncio
@@ -56,6 +58,9 @@ class McpTool:
     title: str
     description: str
     input_schema: dict
+    # What calling it can do: "read", "reversible" (changes data that can be put back) or
+    # "irreversible". The review gate holds answers that used an irreversible tool.
+    risk: str = "irreversible"
 
     @property
     def model_name(self) -> str:
@@ -141,6 +146,9 @@ async def list_tools(url: str, token: str | None) -> list[dict]:
             "input_schema": tool.input_schema or {"type": "object", "properties": {}},
             # Only an explicit read-only hint counts; MCP's default is "may change data".
             "read_only": bool(tool.annotations and tool.annotations.read_only_hint),
+            # MCP's default for a tool that isn't read-only is "may destroy data"; only an
+            # explicit destructiveHint of false marks its changes as safe to undo.
+            "destructive": not (tool.annotations and tool.annotations.destructive_hint is False),
         }
         for tool in tools[:MAX_TOOLS]
     ]
@@ -211,10 +219,27 @@ async def index_mcp(source: DataSource) -> dict:
     }
 
 
+RISKS = ("read", "reversible", "irreversible")
+
+
+def tool_risk(tool: dict, overrides: dict | None = None) -> str:
+    """What calling a tool can do: the admin's override, else the server's hints."""
+    override = (overrides or {}).get(tool["name"])
+    if override in RISKS:
+        return override
+    if tool.get("read_only"):
+        return "read"
+    return "irreversible" if tool.get("destructive", True) else "reversible"
+
+
 def enabled_tools(source_id: uuid.UUID, source_name: str, config: dict) -> list[McpTool]:
     enabled = set(config.get("enabled", []))
+    overrides = config.get("risk") or {}
     return [
-        McpTool(str(source_id), source_name, t["name"], t.get("title") or t["name"], t.get("description", ""), t["input_schema"])
+        McpTool(
+            str(source_id), source_name, t["name"], t.get("title") or t["name"], t.get("description", ""),
+            t["input_schema"], tool_risk(t, overrides),
+        )
         for t in config.get("tools", [])
         if t["name"] in enabled
     ]

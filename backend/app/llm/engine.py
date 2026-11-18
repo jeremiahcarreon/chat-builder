@@ -7,6 +7,7 @@ Events streamed to the browser (as JSON):
   {"type": "tool", "label": ...}              the model is querying data
   {"type": "route", "model": ..., ...}        automatic model choice picked this model
   {"type": "blocked", "message": ...}         the question was refused by the guardrails
+  {"type": "gate", ...}                       the review gate's verdict (see app/gate.py)
   {"type": "error", "message": ...}           something went wrong
   {"type": "done", "message_id": ...}         the turn is complete
 """
@@ -22,6 +23,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import func, select
 
 from app.db import SessionLocal
+from app import gate
 from app.evals.versions import current_version
 from app.guardrails.limits import check_limits
 from app.guardrails.pipeline import check_message
@@ -103,6 +105,13 @@ class Generation:
     usage: list[UsageEvent] = field(default_factory=list)
     # The app's top model when automatic model choice picked this one (for the savings report).
     baseline: str | None = None
+    # What the answer was written from, for the review gate's check: (tool name, result text)
+    # and (label, text) for document excerpts.
+    results: list[tuple[str, str]] = field(default_factory=list)
+    excerpts: list[tuple[str, str]] = field(default_factory=list)
+    # The gate's check of the final text, and whether it led to a rewrite.
+    check: "gate.Check | None" = None
+    rewritten: bool = False
 
     @property
     def text(self) -> str:
@@ -404,12 +413,18 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
         baseline=baseline,
     )
 
+    gated = gate.applies(app, req, prep.replaces)
+
+    async def gate_check(g: Generation) -> gate.Check:
+        evidence = gate.evidence_text(app.knowledge_notes, g.excerpts, g.results, prep.call_context)
+        return await gate.check(app, question, g.text, evidence)
+
     async def converse() -> None:
         try:
             await generate(
                 app, prep.client, prep.provider, prep.model, prep.history, question, gen, queue.put,
                 effort=prep.effort, call_context=prep.call_context, final_only=req.final_only,
-                person=prep.person,
+                person=prep.person, gate_check=gate_check if gated else None,
             )
         finally:
             prep.usage.extend(gen.usage)
@@ -442,12 +457,20 @@ async def run_chat(req: ChatRequest) -> AsyncIterator[dict]:
         answer = "Sorry, I couldn't come up with an answer. Please try rephrasing the question."
         meta["error"] = "empty"
         yield {"type": "error", "message": answer}
-    held = hold and bool(answer) and not meta.get("error")
+    if gated and answer and not meta.get("error"):
+        result = gen.check or gate.Check(gate.GENERAL, [], ran=False)
+        meta["gate"] = await gate.verdict(app, meta, result, gen.rewritten)
+        yield {"type": "gate", **meta["gate"]}
+    # With the gate on, only the answers it holds wait for a person.
+    held = hold and bool(answer) and not meta.get("error") and meta.get("gate", {}).get("status", gate.HOLD) == gate.HOLD
     if held:
         meta["review"] = {"status": HELD}
     message_id = await asyncio.to_thread(_finish, prep, answer or "(no answer)", meta, not answer or meta.get("error") == "empty")
     if held:
         yield {"type": "held", "message": HELD_NOTICE}
+    elif hold and answer:
+        # The gate let it through: the visitor gets the answer that was kept back while it was checked.
+        yield {"type": "text", "text": answer}
     yield {"type": "done", "message_id": message_id}
 
 
@@ -465,6 +488,7 @@ async def generate(
     call_context: dict | None = None,
     final_only: bool = False,
     person: dict | None = None,
+    gate_check=None,
 ) -> Generation:
     """Answers one question: retrieval, the model call, and any data queries it makes.
 
@@ -475,6 +499,7 @@ async def generate(
     tools = context_module.tools_for(ctx)
     gen.meta.setdefault("tool_calls", [])
     gen.meta["sources"] = ctx.source_names
+    gen.excerpts = list(ctx.excerpts)
     session = client.session(
         model=model,
         system=build_system_prompt(
@@ -522,8 +547,10 @@ async def generate(
                 await emit({"type": "tool", "label": context_module.describe_call(ctx, written)})
                 outcome = await context_module.run_tool(ctx, written)
                 gen.meta["tool_calls"].append(
-                    {"name": written.name, "arguments": written.arguments, "error": outcome.is_error, "written": True}
+                    {"name": written.name, "arguments": written.arguments, "error": outcome.is_error, "written": True,
+                     "risk": "read"}
                 )
+                gen.results.append((written.name, outcome.content))
                 session.add_user_message(WRITTEN_SQL_RESULTS.format(results=outcome.content))
                 continue
             if result.stop_reason == "refusal":
@@ -544,11 +571,16 @@ async def generate(
             for call in result.tool_calls:
                 await emit({"type": "tool", "label": context_module.describe_call(ctx, call)})
                 outcome = await context_module.run_tool(ctx, call)
-                gen.meta["tool_calls"].append({"name": call.name, "arguments": call.arguments, "error": outcome.is_error})
+                gen.meta["tool_calls"].append(
+                    {"name": call.name, "arguments": call.arguments, "error": outcome.is_error, "risk": _risk(ctx, call)}
+                )
+                gen.results.append((call.name, outcome.content))
                 results.append(outcome)
             session.add_tool_results(results)
             if gen.parts and not gen.parts[-1].endswith("\n"):
                 await on_text("\n\n")
+        if gate_check is not None and gen.text and not gen.meta.get("refused"):
+            await _check_and_rewrite(gen, session, tools, gate_check, on_text, on_reset, record)
     except LLMError as exc:
         gen.meta["error"] = str(exc)
         await emit({"type": "error", "message": str(exc)})
@@ -557,6 +589,34 @@ async def generate(
         gen.meta["error"] = "internal"
         await emit({"type": "error", "message": "Something went wrong while answering."})
     return gen
+
+
+def _risk(ctx, call: ToolCall) -> str:
+    """What the tool can do (see app/gate.py); the built-in data tools only read."""
+    tool = ctx.mcp_tools[call.name] if call.name in ctx.mcp_tools else None
+    return getattr(tool, "risk", "irreversible") if tool is not None else "read"
+
+
+async def _check_and_rewrite(gen: Generation, session, tools, gate_check, on_text, on_reset, record) -> None:
+    """The review gate's grounding check, with one rewrite when a claim isn't supported."""
+    result = await gate_check(gen)
+    gen.usage.extend(result.usage)
+    if result.ran and result.unsupported and session.accepts_user_messages:
+        original = gen.text
+        await on_reset()
+        claims = "\n".join(f"- {c}" for c in result.unsupported)
+        session.add_user_message(gate.REWRITE.format(claims=claims))
+        step = await session.step(tools, on_text, on_reset)
+        record(step)
+        if step.stop_reason == "end" and gen.text:
+            gen.rewritten = True
+            result = await gate_check(gen)
+            gen.usage.extend(result.usage)
+        else:
+            # The rewrite went wrong (a tool call, cut off): keep the original, still unsupported.
+            await on_reset()
+            await on_text(original)
+    gen.check = result
 
 
 WRITTEN_SQL_RESULTS = (

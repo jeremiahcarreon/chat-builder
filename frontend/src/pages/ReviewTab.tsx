@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Pencil, Trash2, Wrench } from "lucide-react";
+import { CheckCircle2, Pencil, ShieldAlert, Trash2, Wrench } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api";
-import { Button, Card, Textarea } from "../components/ui";
+import { Button, Card, Select, Textarea } from "../components/ui";
 import { money, StatTile } from "./Usage";
 
 interface HeldAnswer {
@@ -14,6 +14,25 @@ interface HeldAnswer {
   sources: string[];
   model: string | null;
   created_at: string;
+  reasons: string[];
+  intent: string | null;
+}
+
+interface IntentRecord {
+  intent: string;
+  tier: "auto" | "approval";
+  pinned: boolean;
+  reviewed: number;
+  sent: number;
+  sent_rate: number | null;
+}
+
+interface GateOverview {
+  auto: number;
+  held: number;
+  waiting: number;
+  hold_reasons: { reason: string; count: number }[];
+  intents: IntentRecord[];
 }
 
 interface ReviewStats {
@@ -36,11 +55,16 @@ function percent(part: number, whole: number): string {
 }
 
 /** Answers waiting for a person, and how often reviewed answers go out unchanged. */
-export function ReviewTab({ appId, reviewing }: { appId: string; reviewing: boolean }) {
+export function ReviewTab({ appId, reviewing, gated }: { appId: string; reviewing: boolean; gated: boolean }) {
   const [days, setDays] = useState(30);
   const { data: stats } = useQuery({
     queryKey: ["review-stats", appId, days],
     queryFn: () => api<ReviewStats>(`/api/apps/${appId}/review/stats?days=${days}`),
+  });
+  const { data: overview } = useQuery({
+    queryKey: ["review-gate", appId, days],
+    queryFn: () => api<GateOverview>(`/api/apps/${appId}/review/gate?days=${days}`),
+    enabled: gated,
   });
   const { data: held } = useQuery({
     queryKey: ["review", appId],
@@ -107,6 +131,8 @@ export function ReviewTab({ appId, reviewing }: { appId: string; reviewing: bool
         </div>
       )}
 
+      {gated && overview && <GateSection appId={appId} overview={overview} />}
+
       <Card
         title={`Held answers${held?.length ? ` (${held.length})` : ""}`}
         description="Visitors see a short notice until you send, edit or discard the answer. Edits teach the app, like edited API drafts do."
@@ -146,12 +172,26 @@ function HeldItem({ appId, item }: { appId: string; item: HeldAnswer }) {
   return (
     <li className="space-y-3 rounded-lg border border-slate-200 p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="font-medium">{item.question || "(no question)"}</p>
+        <p className="font-medium">
+          {item.question || "(no question)"}
+          {item.intent && <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{item.intent}</span>}
+        </p>
         <span className="text-xs text-slate-500">
           {new Date(item.created_at).toLocaleString()}
           {item.model ? ` · ${item.model}` : ""}
         </span>
       </div>
+
+      {item.reasons.length > 0 && (
+        <ul className="space-y-1 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {item.reasons.map((r, i) => (
+            <li key={i} className="flex items-start gap-2">
+              <ShieldAlert size={12} className="mt-0.5 shrink-0" />
+              {r}
+            </li>
+          ))}
+        </ul>
+      )}
 
       {item.tool_calls.length > 0 && (
         <ul className="space-y-1 text-xs text-slate-600">
@@ -199,5 +239,99 @@ function HeldItem({ appId, item }: { appId: string; item: HeldAnswer }) {
         )}
       </div>
     </li>
+  );
+}
+
+/** What the review gate let through, why it held the rest, and where each kind of question stands. */
+function GateSection({ appId, overview }: { appId: string; overview: GateOverview }) {
+  const queryClient = useQueryClient();
+  const pin = useMutation({
+    mutationFn: ({ intent, tier }: { intent: string; tier: string | null }) =>
+      api(`/api/apps/${appId}/review/intents/${encodeURIComponent(intent)}`, {
+        method: "PUT",
+        body: JSON.stringify({ tier }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["review-gate", appId] });
+      queryClient.invalidateQueries({ queryKey: ["app", appId] });
+    },
+  });
+  const total = overview.auto + overview.held;
+
+  return (
+    <Card
+      title="Review gate"
+      description="Answers go out on their own only when their tools were safe, every claim was backed by a lookup or document, and their kind of question has earned it."
+    >
+      <div className="space-y-5">
+        <div className="grid gap-4 sm:grid-cols-3">
+          <StatTile label="Went out on their own" value={percent(overview.auto, total)} detail={`${overview.auto} of ${total} answers`} />
+          <StatTile label="Held" value={String(overview.held)} detail={`${overview.waiting} still waiting for a decision`} />
+          <StatTile
+            label="Top reason held"
+            value={overview.hold_reasons[0] ? String(overview.hold_reasons[0].count) : "–"}
+            detail={overview.hold_reasons[0]?.reason ?? "nothing held yet"}
+          />
+        </div>
+
+        {overview.hold_reasons.length > 1 && (
+          <ul className="space-y-1 text-sm text-slate-600">
+            {overview.hold_reasons.map((r) => (
+              <li key={r.reason} className="flex justify-between gap-4">
+                <span>{r.reason}</span>
+                <span className="tabular-nums">{r.count}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+                <th className="py-2 pr-4 font-medium">Kind of question</th>
+                <th className="py-2 pr-4 font-medium">Sent unchanged</th>
+                <th className="py-2 pr-4 font-medium">Now</th>
+                <th className="py-2 font-medium">Setting</th>
+              </tr>
+            </thead>
+            <tbody>
+              {overview.intents.map((r) => (
+                <tr key={r.intent} className="border-b border-slate-100">
+                  <td className="py-2 pr-4 capitalize">{r.intent}</td>
+                  <td className="py-2 pr-4 tabular-nums">
+                    {r.sent_rate === null ? "–" : `${Math.round(r.sent_rate * 100)}%`}
+                    <span className="text-xs text-slate-500"> ({r.sent} of {r.reviewed})</span>
+                  </td>
+                  <td className="py-2 pr-4">
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-xs ${
+                        r.tier === "auto" ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"
+                      }`}
+                    >
+                      {r.tier === "auto" ? "Goes out on its own" : "Needs approval"}
+                    </span>
+                  </td>
+                  <td className="py-2">
+                    <Select
+                      aria-label={`Setting for ${r.intent}`}
+                      value={r.pinned ? r.tier : "earned"}
+                      disabled={pin.isPending}
+                      onChange={(e) =>
+                        pin.mutate({ intent: r.intent, tier: e.target.value === "earned" ? null : e.target.value })
+                      }
+                    >
+                      <option value="earned">Earned from reviews</option>
+                      <option value="approval">Always needs approval</option>
+                      <option value="auto">Always on its own</option>
+                    </Select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </Card>
   );
 }

@@ -300,7 +300,32 @@ chatting with that one app, never for the dashboard (even for admins).
 - `POST /api/v1/apps/{app}/messages/{id}/outcome` with `sent`, `edited` (plus
   `final_text`) or `discarded` records what staff did with the draft. It shows
   as feedback in the Quality tab, and an edited reply becomes the reference
-  answer when the answer is turned into a test.
+  answer when the answer is turned into a test. An optional `reviewed_by`
+  records who decided.
+- `GET /api/v1/apps/{app}/metrics?days=30` returns volume, holds, hold reasons,
+  review outcomes, cost and each kind of question's tier, for a dashboard in
+  the calling system.
+
+### Review gate
+- Holds only the answers that need a person, for API calls and (when "Review
+  answers to anonymous visitors" is on) anonymous visitors. See app/gate.py.
+- **Risk:** each MCP tool reads, changes data that can be undone, or changes
+  data that can't be undone (from the server's hints, or the admin's choice in
+  the tool list). An answer that used an irreversible tool is held.
+- **Grounding:** a small model compares the answer's claims (part numbers,
+  fitment, specs, stock, prices, dates, policy) with the lookup results,
+  document excerpts and notes. An unsupported claim gets one rewrite without
+  it; if one remains, the answer is held.
+- **Earned autonomy:** the same pass labels the kind of question (from the
+  app's list, like "fitment" or "order status"). Each kind needs approval until
+  people have sent enough of its held answers unchanged (95% of the last 100,
+  at least 50, by default). After that it goes out on its own, with a share
+  still held as spot checks so a kind that slips goes back to approval. Admins
+  can pin a kind either way in the Review tab.
+- API answers carry the verdict in `review`: `{"status": "auto" | "hold",
+  "intent", "tier", "risk", "grounded", "unsupported", "rewritten",
+  "reasons"}`. The calling system sends "auto" answers itself and puts "hold"
+  ones in front of a person, then reports the outcome.
 - Built for the ERP: a queued job drafts a reply for each incoming eBay
   message, and staff check and send it.
 

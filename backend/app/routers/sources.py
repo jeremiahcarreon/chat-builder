@@ -2,6 +2,7 @@ import re
 import shutil
 import uuid
 from datetime import datetime
+from typing import Literal
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, status
@@ -399,6 +400,8 @@ class McpToolOut(BaseModel):
     description: str
     read_only: bool
     enabled: bool
+    # What calling it can do, for the review gate: the admin's choice, else the server's hints.
+    risk: str = "irreversible"
 
 
 class McpTestResult(BaseModel):
@@ -422,9 +425,11 @@ async def _test_mcp(url: str, token: str | None) -> McpTestResult:
     )
 
 
-def _tool_out(tool: dict, enabled: bool) -> McpToolOut:
+def _tool_out(tool: dict, enabled: bool, overrides: dict | None = None) -> McpToolOut:
+    from app.connectors.mcp import tool_risk
+
     return McpToolOut(name=tool["name"], title=tool.get("title") or tool["name"], description=tool.get("description", ""),
-                      read_only=tool.get("read_only", False), enabled=enabled)
+                      read_only=tool.get("read_only", False), enabled=enabled, risk=tool_risk(tool, overrides))
 
 
 def _mcp_source(db: DbSession, user: AdminUser, source_id: uuid.UUID) -> DataSource:
@@ -483,13 +488,16 @@ async def update_mcp(source_id: uuid.UUID, body: McpIn, db: DbSession, user: Adm
 
 class McpToolsIn(BaseModel):
     enabled: list[str] = Field(max_length=200)
+    # What each tool can do, where the server's hints are wrong or missing. Omitted: unchanged.
+    risk: dict[str, Literal["read", "reversible", "irreversible"]] | None = None
 
 
 @router.get("/sources/{source_id}/mcp/tools")
 def mcp_tools(source_id: uuid.UUID, db: DbSession, user: AdminUser) -> list[McpToolOut]:
     source = _mcp_source(db, user, source_id)
     enabled = set(source.config.get("enabled", []))
-    return [_tool_out(t, t["name"] in enabled) for t in source.config.get("tools", [])]
+    overrides = source.config.get("risk") or {}
+    return [_tool_out(t, t["name"] in enabled, overrides) for t in source.config.get("tools", [])]
 
 
 @router.put("/sources/{source_id}/mcp/tools")
@@ -502,9 +510,12 @@ def set_mcp_tools(source_id: uuid.UUID, body: McpToolsIn, db: DbSession, user: A
     if unknown:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown tool: {unknown[0]}. Re-read the server if it's new.")
     enabled = [t["name"] for t in tools if t["name"] in set(body.enabled)]
-    source.config = {**source.config, "enabled": enabled, "enabled_count": len(enabled)}
+    overrides = source.config.get("risk") or {}
+    if body.risk is not None:
+        overrides = {name: level for name, level in body.risk.items() if name in known}
+    source.config = {**source.config, "enabled": enabled, "enabled_count": len(enabled), "risk": overrides}
     db.commit()
-    return [_tool_out(t, t["name"] in enabled) for t in tools]
+    return [_tool_out(t, t["name"] in enabled, overrides) for t in tools]
 
 
 # ------------------------------------------------------------ table notes
