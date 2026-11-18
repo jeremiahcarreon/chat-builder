@@ -3,6 +3,7 @@ name = "chat-builder"
 version = "0.1.0"
 description = "Self-hosted builder for scoped, RAG-enabled chat apps"
 requires-python = ">=3.12"
+license = "MIT"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
