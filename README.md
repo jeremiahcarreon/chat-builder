@@ -3,6 +3,8 @@
 Self-hosted dashboard for building scoped chat assistants on your own data.
 See [OVERVIEW.md](OVERVIEW.md) for the design.
 
+![Try it tab: a parts-desk assistant answering stock and cross-reference questions from its own data](docs/screenshots/try-it.png)
+
 - **Your data:** upload PDFs (including scans), Word, text and Excel files, or
   connect SQL Server, MySQL, MariaDB, Postgres or SQLite. Documents are
   searched automatically; spreadsheets and databases are queried read-only.
@@ -16,6 +18,21 @@ See [OVERVIEW.md](OVERVIEW.md) for the design.
   satisfaction score for every conversation.
 - **Low maintenance:** one-line install; updates itself within a day of each
   release.
+
+## Screenshots
+
+From a demo install for a fictional parts distributor, after a few months of use.
+
+| | |
+| --- | --- |
+| ![Review tab](docs/screenshots/review.png) | ![Quality tab](docs/screenshots/quality.png) |
+| **Review:** answers held for approval, how many go out unchanged, and what the app costs. | **Quality:** satisfaction score for every conversation, worst first. |
+| ![Data sources](docs/screenshots/data-sources.png) | ![Usage](docs/screenshots/usage.png) |
+| **Data sources:** documents, spreadsheets, a read-only database and an MCP server. | **Usage:** tokens, questions, blocked questions and cost per app. |
+| ![App settings](docs/screenshots/app-settings.png) | ![Deploy tab](docs/screenshots/deploy.png) |
+| **Settings:** name, welcome message, model and automatic model choice. | **Deploy:** embeddable widget, sign-in mode and allowed sites. |
+| ![Chat apps](docs/screenshots/apps.png) | ![People](docs/screenshots/people.png) |
+| **Chat Apps:** one dashboard, several scoped assistants. | **People:** admins, members and people signed in from an embedding site. |
 
 ## First steps
 
